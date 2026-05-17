@@ -133,11 +133,30 @@ async def fetch_products_page(
         try:
             resp = await client.get(url, timeout=30)
             data = resp.json()
+
             if data.get("status") == 1:
-                return data["result"]
+                result = data["result"]
+
+                # Brain API повертає result як список товарів напряму:
+                # {"status":1, "result": [{"productID":123,...}, ...]}
+                # count береться з окремого поля або обчислюється
+                if isinstance(result, list):
+                    count = data.get("count", offset + len(result))
+                    # Якщо повернулось рівно limit — можливо є ще сторінки
+                    if len(result) == limit:
+                        count = max(count, offset + limit + 1)
+                    return {"list": result, "count": count}
+
+                # Якщо раптом dict — шукаємо список
+                elif isinstance(result, dict):
+                    items = (result.get("list") or result.get("products")
+                             or result.get("items") or [])
+                    count = int(result.get("count") or result.get("total") or len(items))
+                    return {"list": items, "count": count}
+
         except Exception as e:
             if attempt == 2:
-                log(f"   ⚠️ Не вдалось отримати категорію {cat_id} offset={offset}: {e}")
+                log(f"   ⚠️ Помилка категорія {cat_id} offset={offset}: {e}")
         await asyncio.sleep(1.5 ** attempt)
     return {"list": [], "count": 0}
 
@@ -192,20 +211,30 @@ async def fetch_all_products(
             result   = await fetch_products_page(client, sid, cat_id, lang, offset)
             products = result.get("list", [])
             count    = result.get("count", 0)
-            cat_total = count
+            if products:
+                cat_total += len(products)
+
+            # DEBUG: показуємо сирі дані першого товару першої категорії
+            if products and i == 1 and offset == 0:
+                log(f"🔍 DEBUG сирі дані першого товару:")
+                for k, v in products[0].items():
+                    log(f"   {k} = {repr(v)[:100]}")
 
             for p in products:
-                pid = p.get("productID")
-                if pid and not p.get("is_archive"):
-                    pool[pid] = p
+                # Шукаємо ID товару в різних можливих полях
+                pid = (p.get("productID") or p.get("product_id")
+                       or p.get("ID") or p.get("id"))
+                if pid:
+                    pool[int(pid)] = p  # завжди додаємо, без фільтра is_archive
 
-            fetched = min(offset + 100, count)
-            print(f"   [{i}/{total_cats}] Кат.{cat_id}: {fetched}/{count}", end="\r")
+            fetched = offset + len(products)
+            print(f"   [{i}/{total_cats}] Кат.{cat_id}: {fetched}", end="\r")
 
-            if offset + 100 >= count:
+            # Зупиняємось якщо отримали менше ніж limit (остання сторінка)
+            if len(products) < 100:
                 break
             offset += 100
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.4)  # не більше 3 запитів/сек
 
         log(f"   [{i}/{total_cats}] Категорія {cat_id}: {cat_total} товарів")
 
@@ -355,10 +384,12 @@ def build_xml(
     added = skipped = 0
 
     for p in products:
-        pid = p.get("productID")
+        pid = (p.get("productID") or p.get("product_id")
+               or p.get("ID") or p.get("id"))
         if not pid:
             skipped += 1
             continue
+        pid = int(pid)
 
         # Ціна — перебираємо всі можливі поля Brain API
         price = 0.0
