@@ -551,6 +551,46 @@ def build_xml(
 
 
 # ══════════════════════════════════════════════════════════════════
+#  ЗБЕРЕЖЕННЯ КАТЕГОРІЙ ДЛЯ САЙТУ
+# ══════════════════════════════════════════════════════════════════
+
+def save_categories_json(all_cats: list):
+    """
+    Будує дерево категорій і зберігає в categories.json
+    щоб сайт (index.html) міг показувати реальні категорії Brain.
+    """
+    # Будуємо дерево
+    cat_map = {c["categoryID"]: {
+        "categoryID": c["categoryID"],
+        "parentID":   c["parentID"],
+        "name":       c["name"],
+        "children":   []
+    } for c in all_cats}
+
+    roots = []
+    for c in all_cats:
+        node = cat_map[c["categoryID"]]
+        pid  = c.get("parentID", 1)
+        if pid == 1 or pid not in cat_map:
+            roots.append(node)
+        else:
+            cat_map[pid]["children"].append(node)
+
+    output = {
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "total":     len(all_cats),
+        "categories": roots
+    }
+
+    path = Path("categories.json")
+    path.write_text(
+        json.dumps(output, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    log(f"📂 categories.json збережено ({len(all_cats)} категорій)")
+
+
+# ══════════════════════════════════════════════════════════════════
 #  ЛОГУВАННЯ
 # ══════════════════════════════════════════════════════════════════
 
@@ -596,6 +636,9 @@ async def main():
         try:
             all_cats  = await fetch_categories(client, sid, lang)
             cat_map   = {c["categoryID"]: c for c in all_cats}
+
+            # Зберігаємо всі категорії в categories.json для сайту
+            save_categories_json(all_cats)
 
             # Перевіряємо що вибрані категорії існують
             valid_ids = [cid for cid in cat_ids if cid in cat_map]
