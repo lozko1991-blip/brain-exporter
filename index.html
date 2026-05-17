@@ -227,21 +227,30 @@ let currentLang = 'ua';
 const ITEMS_PER_CAT = 150; // приблизна кількість товарів на категорію
 
 // ── Завантаження категорій ────────────────────────────────────────
-// У production режимі - з бекенду
-// У demo режимі - тестові дані
+// Спочатку пробуємо categories.json (реальні дані з Brain API)
+// Якщо немає — показуємо демо
 async function loadCategories() {
   try {
-    const r = await fetch('http://localhost:8000/api/categories?token=demo&lang=ua');
-    if (!r.ok) throw new Error();
+    // Завантажуємо реальні категорії збережені Actions
+    const r = await fetch('categories.json?t=' + Date.now());
+    if (!r.ok) throw new Error('categories.json не знайдено');
     const data = await r.json();
-    allCats = flattenTree(data.categories);
+
     treeData = data.categories;
+    allCats  = flattenTree(data.categories);
+
+    const generated = data.generated || '';
+    document.getElementById('cat-count').textContent =
+      `${allCats.length} категорій${generated ? ' · оновлено ' + generated : ''}`;
+
   } catch(e) {
-    // Demo режим якщо бекенд недоступний
-    allCats  = DEMO_CATS;
+    // Fallback на демо-категорії якщо categories.json ще не існує
+    console.log('categories.json не знайдено, показуємо демо:', e.message);
+    allCats  = flattenTree(buildTree(DEMO_CATS));
     treeData = buildTree(DEMO_CATS);
+    document.getElementById('cat-count').textContent =
+      `24 категорії (демо — запусти Actions щоб побачити реальні)`;
   }
-  document.getElementById('cat-count').textContent = `${allCats.length} категорій`;
   renderTree();
   updateConfig();
 }
@@ -286,7 +295,10 @@ function buildTree(cats) {
 }
 
 function flattenTree(nodes, result = []) {
-  nodes.forEach(n => { result.push(n); flattenTree(n.children||[], result); });
+  nodes.forEach(n => {
+    result.push(n);
+    flattenTree(n.children||[], result);
+  });
   return result;
 }
 
