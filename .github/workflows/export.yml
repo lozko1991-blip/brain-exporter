@@ -1,17 +1,20 @@
 name: 🧠 Brain → XML Export
 
 on:
-  # Автоматично кожні 6 годин
   schedule:
-    - cron: '0 3,9,15,21 * * *'  # 06:00, 12:00, 18:00, 00:00 за Києвом (UTC+3)
+    - cron: '0 3,9,15,21 * * 1-6'  # quick: пн-сб о 06:00, 12:00, 18:00, 00:00 Київ
+    - cron: '0 3 * * 0'             # full:  неділя о 06:00 Київ
 
-  # Запуск вручну з вибором категорій
   workflow_dispatch:
     inputs:
-      category_ids:
-        description: 'ID категорій через кому (порожньо = з config.json)'
-        required: false
-        default: ''
+      mode:
+        description: 'Режим вигрузки'
+        required: true
+        default: 'quick'
+        type: choice
+        options:
+          - quick
+          - full
       lang:
         description: 'Мова товарів'
         required: true
@@ -20,6 +23,10 @@ on:
         options:
           - ua
           - ru
+      category_ids:
+        description: 'ID категорій через кому (порожньо = з config.json)'
+        required: false
+        default: ''
       shop_name:
         description: 'Назва магазину в XML'
         required: false
@@ -31,7 +38,7 @@ on:
 
 jobs:
   export:
-    name: Вигрузка Brain → XML
+    name: Вигрузка Brain → XML (${{ github.event.inputs.mode || 'quick' }})
     runs-on: ubuntu-latest
     timeout-minutes: 180
 
@@ -57,22 +64,23 @@ jobs:
         env:
           BRAIN_LOGIN:    ${{ secrets.BRAIN_LOGIN }}
           BRAIN_PASSWORD: ${{ secrets.BRAIN_PASSWORD }}
+          EXPORT_MODE:    ${{ github.event.inputs.mode || 'quick' }}
           CATEGORY_IDS:   ${{ github.event.inputs.category_ids }}
           LANG:           ${{ github.event.inputs.lang || 'ua' }}
           SHOP_NAME:      ${{ github.event.inputs.shop_name }}
           SHOP_URL:       ${{ github.event.inputs.shop_url }}
         run: python export.py
 
-      - name: 💾 Зберегти XML в репозиторій
+      - name: 💾 Зберегти в репозиторій
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
           git pull --rebase origin main
-          git add output/catalog.xml categories.json
-          git diff --staged --quiet || git commit -m "🔄 Auto-update catalog $(date +'%Y-%m-%d %H:%M UTC')"
+          git add output/catalog.xml categories.json products_cache.json || true
+          git diff --staged --quiet || git commit -m "🔄 Auto-update catalog [$(date +'%Y-%m-%d %H:%M UTC')] mode=${{ github.event.inputs.mode || 'quick' }}"
           git push
 
-      - name: 📤 Upload Artifact (резервна копія)
+      - name: 📤 Upload Artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
