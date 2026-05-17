@@ -1,0 +1,17 @@
+{
+  "lang": "ua",
+  "shop_name": "Мій магазин",
+  "shop_url": "https://example.com.ua",
+  "output_file": "output/catalog.xml",
+
+  "category_ids": [
+    21,
+    155
+  ],
+
+  "_comment": {
+    "lang": "Мова товарів: ua або ru",
+    "category_ids": "ID категорій з Brain.com.ua. Дивись index.html для вибору.",
+    "output_file": "Шлях до вихідного XML файлу. НЕ ЗМІНЮЙ якщо хочеш постійне посилання."
+  }
+}
