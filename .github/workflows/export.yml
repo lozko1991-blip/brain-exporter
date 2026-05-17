@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       category_ids:
-        description: 'ID категорій через кому (напр: 21,155,47). Порожньо = з config.json'
+        description: 'ID категорій через кому (порожньо = з config.json)'
         required: false
         default: ''
       lang:
@@ -33,10 +33,10 @@ jobs:
   export:
     name: Вигрузка Brain → XML
     runs-on: ubuntu-latest
-    timeout-minutes: 180   # Brain API може бути повільним
+    timeout-minutes: 180
 
     permissions:
-      contents: write      # Потрібно для commit XML в репо
+      contents: write
 
     steps:
       - name: 📥 Checkout
@@ -65,8 +65,9 @@ jobs:
 
       - name: 💾 Зберегти XML в репозиторій
         run: |
-          git config user.name  "GitHub Actions Bot"
+          git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
+          git pull --rebase origin main
           git add output/catalog.xml categories.json
           git diff --staged --quiet || git commit -m "🔄 Auto-update catalog $(date +'%Y-%m-%d %H:%M UTC')"
           git push
