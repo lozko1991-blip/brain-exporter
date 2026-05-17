@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<yml_catalog date="2026-05-17 18:46">
+  <shop>
+    <name>Мій магазин</name>
+    <company>Мій магазин</company>
+    <url>https://example.com.ua</url>
+    <currencies>
+      <currency id="UAH" rate="1"/>
+    </currencies>
+    <categories>
+      <category id="7456">Товари для дітей</category>
+      <category id="8138" parentId="7456">Одяг</category>
+      <category id="7731" parentId="7456">Для малюків</category>
+      <category id="8402" parentId="7731">Крижма</category>
+      <category id="8278" parentId="8138">Кофта</category>
+      <category id="8141" parentId="8138">Комбінезони</category>
+      <category id="8142" parentId="8138">Комплект</category>
+      <category id="8144" parentId="8138">Куртки та верхній одяг</category>
+      <category id="8145" parentId="8138">Боді</category>
+      <category id="8146" parentId="8138">Платтячка</category>
+      <category id="8147" parentId="8138">Покривальця та ковдри</category>
+      <category id="8148" parentId="8138">Рушник для купання</category>
+      <category id="8149" parentId="8138">Слинявчики</category>
+      <category id="8150" parentId="8138">Спальний конверт</category>
+      <category id="8151" parentId="8138">Спортивні костюми</category>
+      <category id="8152" parentId="8138">Топи та туніки</category>
+      <category id="8155" parentId="8138">Шапочки</category>
+      <category id="8156" parentId="8138">Шкарпетки</category>
+      <category id="8157" parentId="8138">Штанці</category>
+      <category id="8226" parentId="8138">Колготки</category>
+      <category id="8229" parentId="8138">Спідниці</category>
+      <category id="8231" parentId="8138">Джинси</category>
+      <category id="8232" parentId="8138">Шорти</category>
+      <category id="8233" parentId="8138">Жилетка</category>
+      <category id="8235" parentId="8138">Кардиган</category>
+      <category id="8238" parentId="8138">Блузки та рубашки</category>
+      <category id="8279" parentId="8138">Лосини</category>
+      <category id="8324" parentId="8138">Підштанники</category>
+      <category id="8343" parentId="8138">Болеро</category>
+      <category id="8345" parentId="8138">Піжами та халати</category>
+      <category id="8346" parentId="8138">Футболка дитяча</category>
+      <category id="8347" parentId="8138">Маєчка</category>
+      <category id="8403" parentId="8138">Кепка</category>
+      <category id="8404" parentId="8138">Панама</category>
+      <category id="8440" parentId="8138">Піджак</category>
+      <category id="8664" parentId="8138">Труси</category>
+      <category id="9184" parentId="8138">Напівкомбінезони</category>
+      <category id="9190" parentId="8138">Комплекти верхнього одягу</category>
+    </categories>
+    <offers/>
+  </shop>
+</yml_catalog>
