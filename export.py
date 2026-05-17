@@ -212,6 +212,14 @@ async def fetch_all_products(
     product_list = list(pool.values())
     log(f"\n✅ Фаза 1: {len(product_list)} унікальних товарів")
 
+    # DEBUG: показуємо поля першого товару щоб зрозуміти структуру API
+    if product_list:
+        sample = product_list[0]
+        log(f"🔍 DEBUG — поля першого товару (productID={sample.get('productID')}):")
+        for key, val in sample.items():
+            if key not in ("options", "pictures"):
+                log(f"   {key} = {repr(val)[:80]}")
+
     # ── Фаза 2: характеристики + фото ───────────────────────────
     log("📋 Фаза 2: характеристики та фото (паралельно по 10)...")
     total    = len(product_list)
@@ -348,18 +356,25 @@ def build_xml(
 
     for p in products:
         pid = p.get("productID")
-        if not pid or p.get("is_archive"):
+        if not pid:
             skipped += 1
             continue
 
-        # Ціна
-        try:
-            price = float(str(p.get("price_uah") or p.get("price") or 0).replace(",", "."))
-        except Exception:
-            price = 0.0
-        if price <= 0:
-            skipped += 1
-            continue
+        # Ціна — перебираємо всі можливі поля Brain API
+        price = 0.0
+        for price_field in ["price_uah", "price", "recommendable_price",
+                            "retail_price_uah", "retail_price", "opt_price"]:
+            val = p.get(price_field)
+            if val:
+                try:
+                    price = float(str(val).replace(",", "."))
+                    if price > 0:
+                        break
+                except Exception:
+                    pass
+
+        # Якщо ціни немає — ставимо 0 але НЕ пропускаємо товар
+        # (деякі товари можуть бути без ціни але з наявністю)
 
         offer = SubElement(offers_el, "offer")
         offer.set("id",        str(pid))
