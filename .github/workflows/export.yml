@@ -10,11 +10,11 @@ on:
       mode:
         description: 'Режим вигрузки'
         required: true
-        default: 'quick'
+        default: 'full'
         type: choice
         options:
-          - quick
           - full
+          - quick
       lang:
         description: 'Мова товарів'
         required: true
@@ -23,18 +23,6 @@ on:
         options:
           - ua
           - ru
-      category_ids:
-        description: 'ID категорій через кому (порожньо = з config.json)'
-        required: false
-        default: ''
-      shop_name:
-        description: 'Назва магазину в XML'
-        required: false
-        default: ''
-      shop_url:
-        description: 'URL сайту в XML'
-        required: false
-        default: ''
 
 jobs:
   export:
@@ -55,7 +43,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: 📦 Залежності
         run: pip install httpx
@@ -65,20 +52,26 @@ jobs:
           BRAIN_LOGIN:    ${{ secrets.BRAIN_LOGIN }}
           BRAIN_PASSWORD: ${{ secrets.BRAIN_PASSWORD }}
           EXPORT_MODE:    ${{ github.event.inputs.mode || 'quick' }}
-          CATEGORY_IDS:   ${{ github.event.inputs.category_ids }}
           LANG:           ${{ github.event.inputs.lang || 'ua' }}
-          SHOP_NAME:      ${{ github.event.inputs.shop_name }}
-          SHOP_URL:       ${{ github.event.inputs.shop_url }}
+          SHOP_NAME:      "AVi"
+          SHOP_URL:       "https://avi.com.ua"
         run: python export.py
 
       - name: 💾 Зберегти в репозиторій
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
-          git pull --rebase origin main
-          git add output/catalog.xml categories.json products_cache.json || true
-          git diff --staged --quiet || git commit -m "🔄 Auto-update catalog [$(date +'%Y-%m-%d %H:%M UTC')] mode=${{ github.event.inputs.mode || 'quick' }}"
-          git push
+          # Спочатку pull щоб синхронізуватись з remote
+          # fetch + reset замість rebase — надійніше
+          git fetch origin main
+          git reset --soft origin/main
+          # Тепер додаємо наші файли
+          git add output/catalog.xml || true
+          git add categories.json || true
+          git add products_cache.json || true
+          # Комітимо якщо є зміни
+          git diff --staged --quiet || git commit -m "🔄 Auto-update [$(date +'%Y-%m-%d %H:%M')] mode=${{ github.event.inputs.mode || 'quick' }}"
+          git push origin main
 
       - name: 📤 Upload Artifact
         uses: actions/upload-artifact@v4
