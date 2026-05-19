@@ -185,7 +185,12 @@ async def fetch_pictures(client: httpx.AsyncClient, sid: str, pid: int) -> list:
         r = await client.get(f"{API_BASE}/product_pictures/{pid}/{sid}", timeout=15)
         d = r.json()
         if d.get("status") == 1:
-            return d.get("result", {}).get("pictures", [])
+            result = d.get("result", [])
+            # Brain повертає result як список фото напряму
+            if isinstance(result, list):
+                return result
+            elif isinstance(result, dict):
+                return result.get("pictures", [])
     except Exception:
         pass
     return []
@@ -226,22 +231,25 @@ async def fetch_all_products_full(
     product_list = list(pool.values())
     log(f"\n✅ Фаза 1: {len(product_list)} унікальних товарів")
 
-    # Фаза 2: характеристики + фото батчами
-    log("📋 Фаза 2: характеристики та фото...")
+    # Фаза 2: характеристики + фото паралельно по 3 (ліміт Brain 3 req/sec)
+    log("📋 Фаза 2: характеристики та фото (паралельно по 3)...")
     total    = len(product_list)
-    batch_sz = 10
+    batch_sz = 3  # 3 товари × 2 запити = 6 req/батч, пауза 2 сек = 3 req/sec
 
     for start in range(0, total, batch_sz):
-        batch        = product_list[start:start + batch_sz]
-        opts_results = await asyncio.gather(*[
-            fetch_options(client, sid, p.get("productID") or p.get("id"), lang)
-            for p in batch
+        batch = product_list[start:start + batch_sz]
+        pids  = [p.get("productID") or p.get("id") for p in batch]
+
+        # Паралельно для кожного товару: options + pictures одночасно
+        all_results = await asyncio.gather(*[
+            asyncio.gather(
+                fetch_options(client, sid, pid, lang),
+                fetch_pictures(client, sid, pid),
+            )
+            for pid in pids
         ])
-        pics_results = await asyncio.gather(*[
-            fetch_pictures(client, sid, p.get("productID") or p.get("id"))
-            for p in batch
-        ])
-        for p, opts, pics in zip(batch, opts_results, pics_results):
+
+        for p, (opts, pics) in zip(batch, all_results):
             p["options"]  = opts
             p["pictures"] = pics
 
@@ -249,7 +257,9 @@ async def fetch_all_products_full(
         pct  = int(done / total * 100)
         bar  = "█" * (pct // 5) + "░" * (20 - pct // 5)
         print(f"   [{bar}] {pct}% ({done}/{total})", end="\r")
-        await asyncio.sleep(0.4)
+
+        # Пауза 2 сек: 3 товари × 2 запити = 6 req / 2 сек = 3 req/sec
+        await asyncio.sleep(2)
 
     log(f"\n✅ Фаза 2 завершена")
 
@@ -406,6 +416,12 @@ def build_xml(
             el.set("parentId", str(cat["parentID"]))
         el.text = safe(cat["name"])
 
+    # Націнка — константи винесені сюди один раз
+    MARKUP_PERCENT      = 1.6   # ціна продажу × 1.6 + 40
+    MARKUP_FIXED        = 40
+    MARKUP_OLD_PERCENT  = 1.5   # стара ціна × 1.5 + 40
+    MARKUP_OLD_MIN      = 1.15  # якщо немає рекомендованої → +15%
+
     # Товари
     offers_el = SubElement(shop, "offers")
     added = skipped = 0
@@ -418,7 +434,7 @@ def build_xml(
             continue
         pid = int(pid)
 
-        # Ціна
+        # Ціна — беремо price_uah (гривня)
         price = 0.0
         for f in ["price_uah", "price", "retail_price_uah", "recommendable_price"]:
             try:
@@ -434,36 +450,52 @@ def build_xml(
 
         offer = SubElement(offers_el, "offer")
         offer.set("id", str(pid))
-        offer.set("available", "true")
 
         group_id = build_group_id(p)
         if group_id:
             offer.set("group_id", group_id)
 
-        name = safe(p.get("name_ua") or p.get("name") or "")
-        SubElement(offer, "name").text       = name
-        SubElement(offer, "price").text      = str(round(price, 2))
+        # Назва — Brain повертає `name` вже на потрібній мові (ua/ru)
+        # При lang=ua Brain віддає name_ua, при lang=ru — name
+        name = safe(p.get("name") or "")
+        SubElement(offer, "name").text = name
+
+        # Ціна з націнкою
+        sell_price = round(price * MARKUP_PERCENT + MARKUP_FIXED, 0)
+        SubElement(offer, "price").text      = str(int(sell_price))
         SubElement(offer, "currencyId").text = "UAH"
 
+        # Стара ціна
         try:
-            old = float(str(p.get("retail_price_uah") or p.get("recommendable_price") or 0).replace(",", "."))
-            if old > price:
-                SubElement(offer, "price_old").text = str(round(old, 2))
+            rec = float(str(
+                p.get("retail_price_uah") or p.get("recommendable_price") or 0
+            ).replace(",", "."))
+            old_sell = round(rec * MARKUP_OLD_PERCENT + MARKUP_FIXED, 0) if rec > 0 else 0
         except Exception:
-            pass
+            old_sell = 0
+
+        if old_sell > sell_price:
+            SubElement(offer, "price_old").text = str(int(old_sell))
+        else:
+            # Немає рекомендованої — показуємо +15% як стара ціна
+            SubElement(offer, "price_old").text = str(int(round(sell_price * MARKUP_OLD_MIN, 0)))
 
         SubElement(offer, "categoryId").text = str(p.get("categoryID", ""))
 
-        # Фото
+        # Фото — всі фото з product_pictures в якості full_image
+        # Якщо product_pictures не завантажились — fallback на фото з products
         pics = p.get("pictures", [])
         if pics:
-            for pic in pics:
-                url = pic.get("large_image") or pic.get("full_image") or pic.get("medium_image")
-                if url:
+            pics_sorted = sorted(pics, key=lambda x: x.get("priority", 99))
+            for pic in pics_sorted:
+                url = (pic.get("full_image") or pic.get("large_image")
+                       or pic.get("medium_image"))
+                if url and "no-photo" not in url:
                     SubElement(offer, "picture").text = url
         else:
-            for key in ["large_image", "full_image", "medium_image", "small_image"]:
-                if p.get(key):
+            # Fallback — хоча б одне фото з основного запиту
+            for key in ["full_image", "large_image", "medium_image", "small_image"]:
+                if p.get(key) and "no-photo" not in str(p.get(key)):
                     SubElement(offer, "picture").text = p[key]
                     break
 
@@ -486,14 +518,29 @@ def build_xml(
             except Exception:
                 pass
 
+        # Наявність
+        is_archive = str(p.get("is_archive", "0")) not in ("0", "False", "false", "")
         avail = p.get("available", {})
-        qty   = sum(avail.values()) if isinstance(avail, dict) else 0
-        SubElement(offer, "stock_quantity").text = str(qty)
+        if isinstance(avail, dict):
+            qty = sum(int(v) for v in avail.values() if str(v).isdigit())
+        elif isinstance(avail, (int, float)):
+            qty = int(avail)
+        else:
+            qty = 0
 
-        desc = safe(p.get("brief_description") or p.get("description_ua") or "")
+        if is_archive or qty == 0:
+            offer.set("available", "false")
+            SubElement(offer, "stock_quantity").text = "0"
+        else:
+            offer.set("available", "true")
+            SubElement(offer, "stock_quantity").text = "1"
+
+        # Опис — brief_description це повний опис товару в Brain
+        desc = safe(p.get("brief_description") or "")
         if desc:
             SubElement(offer, "description_ua").text = f"<![CDATA[{desc}]]>"
 
+        # Характеристики
         for opt in p.get("options", []):
             oname = safe(opt.get("OptionName") or opt.get("name_ua") or opt.get("name") or "")
             oval  = safe(opt.get("ValueName")  or opt.get("value_ua") or opt.get("value") or "")
