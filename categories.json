@@ -1,6 +1,6 @@
 {
-  "generated": "2026-05-25 20:16",
-  "total": 2778,
+  "generated": "2026-05-26 08:58",
+  "total": 2781,
   "categories": [
     {
       "categoryID": 1181,
@@ -2711,6 +2711,18 @@
                   "parentID": 9812,
                   "name": "Модулі телеметрії",
                   "children": []
+                },
+                {
+                  "categoryID": 10443,
+                  "parentID": 9812,
+                  "name": "Конвертери сигналу",
+                  "children": []
+                },
+                {
+                  "categoryID": 10444,
+                  "parentID": 9812,
+                  "name": "Модулі AI трекінгу",
+                  "children": []
                 }
               ]
             },
@@ -2762,6 +2774,12 @@
                   "children": []
                 }
               ]
+            },
+            {
+              "categoryID": 10445,
+              "parentID": 9779,
+              "name": "Дрони",
+              "children": []
             }
           ]
         },
