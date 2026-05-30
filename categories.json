@@ -1,6 +1,6 @@
 {
-  "generated": "2026-05-29 21:27",
-  "total": 2781,
+  "generated": "2026-05-30 09:33",
+  "total": 2786,
   "categories": [
     {
       "categoryID": 1181,
@@ -16366,6 +16366,36 @@
               "categoryID": 10376,
               "parentID": 10014,
               "name": "Моніторні контролери",
+              "children": []
+            },
+            {
+              "categoryID": 10446,
+              "parentID": 10014,
+              "name": "Стійки для звукового обладнання",
+              "children": []
+            },
+            {
+              "categoryID": 10447,
+              "parentID": 10014,
+              "name": "CD програвачі",
+              "children": []
+            },
+            {
+              "categoryID": 10448,
+              "parentID": 10014,
+              "name": "Фонокоректори",
+              "children": []
+            },
+            {
+              "categoryID": 10449,
+              "parentID": 10014,
+              "name": "Аудіо кросовери",
+              "children": []
+            },
+            {
+              "categoryID": 10450,
+              "parentID": 10014,
+              "name": "Мережеві стрімери",
               "children": []
             }
           ]
