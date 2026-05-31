@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<yml_catalog date="2026-05-30 18:18">
+<yml_catalog date="2026-05-31 08:26">
   <shop>
     <name>AVi</name>
     <company>AVi</company>
@@ -30089,9 +30089,9 @@
       </offer>
       <offer id="100584683" group_id="4668-86B-blue" available="false">
         <name>Набір дитячого одягу Tongs з капюшоном (4668-86B-blue)</name>
-        <price>1168</price>
+        <price>1170</price>
         <currencyId>UAH</currencyId>
-        <price_old>1343</price_old>
+        <price_old>1346</price_old>
         <categoryId>8142</categoryId>
         <picture>https://opt.brain.com.ua/static/images/prod_img/3/0/U1138030_main.jpg</picture>
         <picture>https://opt.brain.com.ua/static/images/prod_img/3/0/U1138030_2main.jpg</picture>
@@ -155074,7 +155074,7 @@
       </offer>
       <offer id="721886" group_id="15730-140G-blue" available="false">
         <name>Футболка дитяча Breeze майка &quot;COOL&quot; (15730-140G-blue)</name>
-        <price>331</price>
+        <price>330</price>
         <currencyId>UAH</currencyId>
         <price_old>379</price_old>
         <categoryId>8346</categoryId>
