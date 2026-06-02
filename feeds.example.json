@@ -1,0 +1,21 @@
+{
+  "shop_url": "https://avi.com.ua",
+  "feeds": [
+    {
+      "id": "rozetka",
+      "name": "Rozetka",
+      "lang": "ua",
+      "markup_percent": 20,
+      "markup_fixed": 50,
+      "category_ids": [1181, 1191]
+    },
+    {
+      "id": "prom",
+      "name": "Prom.ua",
+      "lang": "ua",
+      "markup_percent": 15,
+      "markup_fixed": 0,
+      "category_ids": [1181]
+    }
+  ]
+}
