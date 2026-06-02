@@ -111,6 +111,37 @@
   .url-box { background: var(--s3); border: 1px solid var(--b2); border-radius: 8px; padding: 12px 14px; font-size: 11px; color: var(--green); word-break: break-all; margin-top: 10px; }
 
   .loading { color: var(--t3); font-size: 12px; text-align: center; padding: 30px; }
+
+  /* Вкладки фідів */
+  .feed-tabs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .feed-tab {
+    padding: 8px 14px; border-radius: 9px; border: 1px solid var(--b2);
+    background: var(--s2); color: var(--t2); font-family: inherit; font-size: 12px;
+    cursor: pointer; transition: all .15s; display: flex; align-items: center; gap: 7px;
+  }
+  .feed-tab:hover { border-color: var(--blue); }
+  .feed-tab.active { border-color: var(--violet); color: var(--t1); background: rgba(124,92,252,.12); }
+  .feed-tab .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--violet); }
+  .feed-tab .cnt { font-size: 10px; color: var(--t3); }
+  .feed-tab .x { color: var(--t3); font-size: 13px; margin-left: 2px; }
+  .feed-tab .x:hover { color: var(--red); }
+  .feed-add {
+    padding: 8px 14px; border-radius: 9px; border: 1px dashed var(--b2);
+    background: none; color: var(--blue); font-family: inherit; font-size: 12px; cursor: pointer;
+  }
+  .feed-add:hover { border-color: var(--blue); background: rgba(79,158,255,.08); }
+
+  /* Налаштування фіда */
+  .feed-cfg { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .fld { display: flex; flex-direction: column; gap: 5px; }
+  .fld label { font-size: 10px; color: var(--t3); text-transform: uppercase; letter-spacing: .06em; }
+  .fld input {
+    background: var(--s3); border: 1px solid var(--b2); border-radius: 8px;
+    padding: 8px 12px; color: var(--t1); font-family: inherit; font-size: 13px; outline: none;
+  }
+  .fld input:focus { border-color: var(--blue); }
+  .markup-note { font-size: 11px; color: var(--t3); margin-top: 8px; line-height: 1.6; }
+  .markup-note b { color: var(--green); }
 </style>
 </head>
 <body>
@@ -126,25 +157,38 @@
   <div class="steps">
     <div class="step">
       <div class="step-n">1</div>
-      <div class="step-title">Вибери категорії</div>
-      <div class="step-desc">Постав галочки навпроти потрібних категорій Brain.com.ua</div>
+      <div class="step-title">Створи фіди</div>
+      <div class="step-desc">Один фід = один XML на маркетплейс. Для кожного — свої категорії і своя націнка</div>
     </div>
     <div class="step">
       <div class="step-n">2</div>
-      <div class="step-title">Скопіюй config.json</div>
-      <div class="step-desc">Натисни кнопку копіювання і встав вміст у файл <b>config.json</b> в репозиторії</div>
+      <div class="step-title">Скопіюй feeds.json</div>
+      <div class="step-desc">Натисни кнопку копіювання і встав вміст у файл <b>feeds.json</b> в репозиторії</div>
     </div>
     <div class="step">
       <div class="step-n">3</div>
       <div class="step-title">Запусти Actions</div>
-      <div class="step-desc">GitHub → Actions → Brain XML Export → Run workflow</div>
+      <div class="step-desc">GitHub → Actions → Brain XML Export → Run workflow. Далі — автооновлення 3×/день</div>
+    </div>
+  </div>
+
+  <!-- Вкладки фідів -->
+  <div class="card">
+    <div class="chead">
+      <div class="ctitle">🏪 Фіди (маркетплейси)</div>
+      <div style="font-size:11px;color:var(--t3)">кожен → окремий XML</div>
+    </div>
+    <div class="cbody">
+      <div class="feed-tabs" id="feed-tabs"></div>
+      <div class="feed-cfg" id="feed-cfg"></div>
+      <div class="markup-note" id="markup-note"></div>
     </div>
   </div>
 
   <!-- Вибір категорій -->
   <div class="card">
     <div class="chead">
-      <div class="ctitle">📁 Категорії Brain.com.ua</div>
+      <div class="ctitle">📁 Категорії для: <span id="active-feed-name" style="color:var(--violet)">—</span></div>
       <div id="cat-count" style="font-size:11px;color:var(--t3)">Завантаження...</div>
     </div>
     <div class="toolbar">
@@ -159,11 +203,11 @@
     </div>
   </div>
 
-  <!-- Панель вибраних -->
+  <!-- Панель вибраних (активний фід) -->
   <div class="sel-bar">
     <div>
       <div class="sel-count" id="sel-count">0</div>
-      <div class="sel-info">категорій вибрано</div>
+      <div class="sel-info">категорій у фіді</div>
     </div>
     <div>
       <div style="font-family:'Unbounded',sans-serif;font-size:20px;font-weight:700;color:var(--amber)" id="est-count">~0</div>
@@ -178,10 +222,10 @@
     </div>
   </div>
 
-  <!-- Генерований config.json -->
+  <!-- Генерований feeds.json -->
   <div class="card">
     <div class="chead">
-      <div class="ctitle">⚙️ Твій config.json</div>
+      <div class="ctitle">⚙️ Твій feeds.json</div>
       <button class="copy-btn" id="copy-btn" onclick="copyConfig()">📋 Копіювати</button>
     </div>
     <div class="cbody">
@@ -189,28 +233,27 @@
       <div class="info" style="margin-top:12px">
         <b>Що робити з цим файлом:</b><br>
         1. Натисни "Копіювати" вгорі<br>
-        2. Відкрий GitHub → твій репозиторій → файл <code>config.json</code><br>
-        3. Натисни олівець (Edit) → встав скопійований текст → збережи (Commit)<br>
-        4. GitHub Actions автоматично запуститься або запусти вручну
+        2. Відкрий GitHub → твій репозиторій → файл <code>feeds.json</code> (створи, якщо немає)<br>
+        3. Edit → встав скопійований текст → Commit<br>
+        4. GitHub Actions згенерує по одному XML на кожен фід
       </div>
     </div>
   </div>
 
-  <!-- Постійне посилання -->
+  <!-- Постійні посилання -->
   <div class="card">
     <div class="chead">
-      <div class="ctitle">🔗 Постійне посилання на XML</div>
+      <div class="ctitle">🔗 Постійні посилання на XML</div>
     </div>
     <div class="cbody">
       <div class="info">
-        Після першого запуску Actions XML файл збережеться в репозиторій.<br>
-        Це посилання <b>не зміниться ніколи</b> — вставляй його в Prom.ua, Rozetka, Hotline:
+        Після першого запуску Actions кожен фід збережеться окремим файлом.<br>
+        Заміни <code>АКАУНТ/РЕПО</code> на свої. Ці посилання <b>не зміняться ніколи</b>:
       </div>
-      <div class="url-box" id="xml-url">
-        https://raw.githubusercontent.com/ВАШ_АКАУНТ/ВАШ_РЕПО/main/output/catalog.xml
-      </div>
+      <div id="xml-urls"></div>
       <div class="info" style="margin-top:10px">
-        🔄 <b>Оновлення:</b> автоматично кожні 6 годин (06:00, 12:00, 18:00, 00:00 за Києвом)
+        🔄 <b>Автооновлення цін і наявності:</b> 3 рази на день (09:00, 15:00, 21:00 за Києвом).
+        Повна вигрузка з описами/фото — раз на тиждень (неділя).
       </div>
     </div>
   </div>
@@ -221,10 +264,24 @@
 // ── Стан ─────────────────────────────────────────────────────────
 let allCats    = [];
 let treeData   = [];
-let selected   = new Set();
 let expanded   = new Set();
-let currentLang = 'ua';
-const ITEMS_PER_CAT = 150; // приблизна кількість товарів на категорію
+const ITEMS_PER_CAT = 150;
+
+// Кожен фід: {id, name, selected:Set, markup_percent, markup_fixed, lang}
+let feeds = [];
+let activeFeed = 0;
+let GH = { account: "АКАУНТ", repo: "РЕПО" };
+
+function newFeed(name) {
+  return { id: slug(name), name, selected: new Set(),
+           markup_percent: 0, markup_fixed: 0, lang: 'ua' };
+}
+function slug(s) {
+  return (s||'feed').toLowerCase().trim()
+    .replace(/[^a-z0-9а-яіїєґ]+/gi,'-').replace(/^-+|-+$/g,'') || 'feed';
+}
+function af() { return feeds[activeFeed]; }   // активний фід
+let selected = new Set();                     // проксі на af().selected для сумісності
 
 // ── Завантаження категорій ────────────────────────────────────────
 // Спочатку пробуємо categories.json (реальні дані з Brain API)
@@ -252,7 +309,8 @@ async function loadCategories() {
       `24 категорії (демо — запусти Actions щоб побачити реальні)`;
   }
   renderTree();
-  updateConfig();
+  if (feeds.length === 0) feeds.push(newFeed('Rozetka'));
+  selectFeed(0);
 }
 
 // Demo категорії для перегляду без бекенду
@@ -358,9 +416,10 @@ function check(id) {
   const node = findNode(id, treeData);
   if (!node) return;
   const ids  = getAllIds(node);
-  const selCnt = ids.filter(i => selected.has(i)).length;
+  const sel  = af().selected;
+  const selCnt = ids.filter(i => sel.has(i)).length;
   const shouldRemove = selCnt > 0;
-  ids.forEach(i => shouldRemove ? selected.delete(i) : selected.add(i));
+  ids.forEach(i => shouldRemove ? sel.delete(i) : sel.add(i));
   renderTree();
   updateConfig();
 }
@@ -375,12 +434,12 @@ function findNode(id, nodes) {
 }
 
 function selectAll() {
-  allCats.forEach(c => selected.add(c.categoryID));
+  allCats.forEach(c => af().selected.add(c.categoryID));
   renderTree(); updateConfig();
 }
 
 function clearAll() {
-  selected.clear();
+  af().selected.clear();
   renderTree(); updateConfig();
 }
 
@@ -397,7 +456,7 @@ function collapseAll() {
 function filterCats() { renderTree(); }
 
 function setLang(l) {
-  currentLang = l;
+  af().lang = l;
   document.getElementById('btn-ua').style.borderColor = l==='ua' ? 'var(--blue)' : '';
   document.getElementById('btn-ua').style.color       = l==='ua' ? 'var(--blue)' : '';
   document.getElementById('btn-ru').style.borderColor = l==='ru' ? 'var(--amber)' : '';
@@ -407,20 +466,113 @@ function setLang(l) {
   updateConfig();
 }
 
-// ── Генерація config.json ─────────────────────────────────────────
-function updateConfig() {
-  const ids = [...selected].sort((a,b)=>a-b);
-  const cfg = {
-    lang:         currentLang,
-    shop_name:    "Мій магазин",
-    shop_url:     "https://example.com.ua",
-    output_file:  "output/catalog.xml",
-    category_ids: ids
-  };
+// ── ФІДИ ──────────────────────────────────────────────────────────
+function selectFeed(i) {
+  activeFeed = i;
+  selected = af().selected;       // синхронізуємо проксі для renderTree
+  setLang(af().lang);             // підтягує мову фіда + викликає updateConfig
+  renderFeedTabs();
+  renderFeedConfig();
+  renderTree();
+  updateConfig();
+}
 
-  document.getElementById('config-output').textContent = JSON.stringify(cfg, null, 2);
-  document.getElementById('sel-count').textContent = ids.length;
-  document.getElementById('est-count').textContent = '~' + (ids.length * ITEMS_PER_CAT).toLocaleString('uk');
+function addFeed() {
+  const name = prompt('Назва нового фіда (напр. Prom, Hotline):', 'Новий фід');
+  if (!name) return;
+  feeds.push(newFeed(name));
+  selectFeed(feeds.length - 1);
+}
+
+function removeFeed(i, ev) {
+  ev.stopPropagation();
+  if (feeds.length === 1) { alert('Має лишитись хоча б один фід'); return; }
+  if (!confirm(`Видалити фід "${feeds[i].name}"?`)) return;
+  feeds.splice(i, 1);
+  selectFeed(Math.max(0, activeFeed >= i ? activeFeed - 1 : activeFeed));
+}
+
+function renderFeedTabs() {
+  const wrap = document.getElementById('feed-tabs');
+  wrap.innerHTML = '';
+  feeds.forEach((f, i) => {
+    const t = document.createElement('div');
+    t.className = 'feed-tab' + (i === activeFeed ? ' active' : '');
+    t.onclick = () => selectFeed(i);
+    t.innerHTML = `<span class="dot"></span>${f.name}
+      <span class="cnt">${f.selected.size} кат.</span>
+      <span class="x" title="Видалити" onclick="removeFeed(${i}, event)">✕</span>`;
+    wrap.appendChild(t);
+  });
+  const add = document.createElement('button');
+  add.className = 'feed-add';
+  add.textContent = '+ Додати фід';
+  add.onclick = addFeed;
+  wrap.appendChild(add);
+}
+
+function renderFeedConfig() {
+  const f = af();
+  document.getElementById('feed-cfg').innerHTML = `
+    <div class="fld">
+      <label>Назва фіда / магазину</label>
+      <input id="f-name" value="${f.name.replace(/"/g,'&quot;')}" oninput="onFeedName(this.value)">
+    </div>
+    <div class="fld">
+      <label>ID файлу (output/____.xml)</label>
+      <input id="f-id" value="${f.id}" oninput="af().id=slug(this.value);updateConfig();renderFeedTabs()">
+    </div>
+    <div class="fld">
+      <label>Націнка, %</label>
+      <input id="f-perc" type="number" step="1" value="${f.markup_percent}"
+             oninput="af().markup_percent=parseFloat(this.value)||0;updateConfig()">
+    </div>
+    <div class="fld">
+      <label>Націнка, грн (фікс)</label>
+      <input id="f-fix" type="number" step="1" value="${f.markup_fixed}"
+             oninput="af().markup_fixed=parseFloat(this.value)||0;updateConfig()">
+    </div>`;
+  document.getElementById('active-feed-name').textContent = f.name;
+}
+
+function onFeedName(v) {
+  af().name = v;
+  document.getElementById('active-feed-name').textContent = v;
+  renderFeedTabs();
+  updateConfig();
+}
+
+// ── Генерація feeds.json ──────────────────────────────────────────
+function updateConfig() {
+  const out = {
+    shop_url: "https://example.com.ua",
+    feeds: feeds.map(f => ({
+      id:             f.id,
+      name:           f.name,
+      lang:           f.lang,
+      markup_percent: f.markup_percent,
+      markup_fixed:   f.markup_fixed,
+      category_ids:   [...f.selected].sort((a,b)=>a-b)
+    }))
+  };
+  document.getElementById('config-output').textContent = JSON.stringify(out, null, 2);
+
+  const f = af();
+  document.getElementById('sel-count').textContent = f.selected.size;
+  document.getElementById('est-count').textContent = '~' + (f.selected.size * ITEMS_PER_CAT).toLocaleString('uk');
+
+  // приклад розрахунку націнки
+  const ex = Math.round(1000 * (1 + f.markup_percent/100) + f.markup_fixed);
+  document.getElementById('markup-note').innerHTML =
+    `Приклад: товар з закупкою <b>1000 грн</b> → ціна продажу у фіді "${f.name}" = <b>${ex} грн</b> ` +
+    `(1000 +${f.markup_percent}% +${f.markup_fixed}грн)`;
+
+  // посилання
+  document.getElementById('xml-urls').innerHTML = feeds.map(f =>
+    `<div class="url-box">https://raw.githubusercontent.com/${GH.account}/${GH.repo}/main/output/${f.id}.xml</div>`
+  ).join('');
+
+  renderFeedTabs();
 }
 
 function copyConfig() {
@@ -435,7 +587,6 @@ function copyConfig() {
 
 // ── Ініціалізація ─────────────────────────────────────────────────
 loadCategories();
-updateConfig();
 </script>
 </body>
 </html>
