@@ -2,8 +2,12 @@ name: 🧠 Brain → XML Export
 
 on:
   schedule:
-    - cron: '0 3,9,15,21 * * 1-6'  # quick: пн-сб о 06:00, 12:00, 18:00, 00:00 Київ
-    - cron: '0 3 * * 0'             # full:  неділя о 06:00 Київ
+    # QUICK (тільки ціни і наявність) — 3 рази на день за Києвом.
+    # GitHub cron у UTC; Київ влітку = UTC+3, взимку = UTC+2.
+    # Беремо UTC так, щоб приблизно потрапити на 09:00 / 15:00 / 21:00 Київ.
+    - cron: '0 6,12,18 * * *'   # ≈ 09:00, 15:00, 21:00 Київ (літо)
+    # FULL (товари + описи + фото) — раз на тиждень, неділя.
+    - cron: '0 1 * * 0'         # ≈ 04:00 Київ неділя
 
   workflow_dispatch:
     inputs:
@@ -16,7 +20,7 @@ on:
           - full
           - quick
       lang:
-        description: 'Мова товарів'
+        description: 'Мова товарів (база)'
         required: true
         default: 'ua'
         type: choice
@@ -24,12 +28,12 @@ on:
           - ua
           - ru
 
+# Визначаємо режим автоматично залежно від того, який cron спрацював
 jobs:
   export:
-    name: Вигрузка Brain → XML (${{ github.event.inputs.mode || 'quick' }})
+    name: Вигрузка Brain → XML
     runs-on: ubuntu-latest
     timeout-minutes: 180
-
     permissions:
       contents: write
 
@@ -47,30 +51,42 @@ jobs:
       - name: 📦 Залежності
         run: pip install httpx
 
+      - name: 🧭 Визначити режим
+        id: pick
+        run: |
+          # Неділя о 01:00 UTC → full; решта schedule → quick;
+          # ручний запуск → беремо input.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
+            echo "lang=${{ github.event.inputs.lang }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 1 * * 0" ]; then
+            echo "mode=full"  >> "$GITHUB_OUTPUT"
+            echo "lang=ua"    >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=quick" >> "$GITHUB_OUTPUT"
+            echo "lang=ua"    >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 🚀 Вигрузка XML
         env:
           BRAIN_LOGIN:    ${{ secrets.BRAIN_LOGIN }}
           BRAIN_PASSWORD: ${{ secrets.BRAIN_PASSWORD }}
-          EXPORT_MODE:    ${{ github.event.inputs.mode || 'quick' }}
-          LANG:           ${{ github.event.inputs.lang || 'ua' }}
+          EXPORT_MODE:    ${{ steps.pick.outputs.mode }}
+          LANG:           ${{ steps.pick.outputs.lang }}
           SHOP_NAME:      "AVi"
           SHOP_URL:       "https://avi.com.ua"
         run: python export.py
 
       - name: 💾 Зберегти в репозиторій
         run: |
-          git config user.name "GitHub Actions Bot"
+          git config user.name  "GitHub Actions Bot"
           git config user.email "actions@github.com"
-          # Спочатку pull щоб синхронізуватись з remote
-          # fetch + reset замість rebase — надійніше
           git fetch origin main
           git reset --soft origin/main
-          # Тепер додаємо наші файли
-          git add output/catalog.xml || true
+          git add output/*.xml || true
           git add categories.json || true
           git add products_cache.json || true
-          # Комітимо якщо є зміни
-          git diff --staged --quiet || git commit -m "🔄 Auto-update [$(date +'%Y-%m-%d %H:%M')] mode=${{ github.event.inputs.mode || 'quick' }}"
+          git diff --staged --quiet || git commit -m "🔄 Auto-update [$(date +'%Y-%m-%d %H:%M')] mode=${{ steps.pick.outputs.mode }}"
           git push origin main
 
       - name: 📤 Upload Artifact
@@ -78,5 +94,5 @@ jobs:
         if: always()
         with:
           name: brain-catalog-${{ github.run_number }}
-          path: output/catalog.xml
+          path: output/*.xml
           retention-days: 30
