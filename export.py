@@ -41,6 +41,18 @@ CATS_FILE  = Path("categories.json")
 FEEDS_FILE = Path("feeds.json")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+# Префікс для ID товарів і категорій у XML — щоб уникнути колізій
+# з товарами інших постачальників на маркетплейсі. "br" = Brain.
+ID_PREFIX = "br"
+
+def pid_ext(pid) -> str:
+    """ID товару для XML: br12345"""
+    return f"{ID_PREFIX}{pid}"
+
+def cid_ext(cid) -> str:
+    """ID категорії для XML: br1181"""
+    return f"{ID_PREFIX}{cid}"
+
 
 # ══════════════════════════════════════════════════════════════════
 #  ЛОГУВАННЯ
@@ -272,6 +284,7 @@ async def fetch_all_products_full(
 
     # Фаза 1: базові дані (список товарів)
     log("\n📦 Фаза 1: базові дані товарів...")
+    skipped_oos = 0
     for i, cat_id in enumerate(cat_ids, 1):
         offset = 0
         cat_count = 0
@@ -282,19 +295,29 @@ async def fetch_all_products_full(
             for p in products:
                 pid = (p.get("productID") or p.get("product_id")
                        or p.get("ID") or p.get("id"))
-                if pid:
-                    p["categoryID"] = p.get("categoryID", cat_id)
-                    pool[int(pid)] = p
-                    cat_count += 1
+                if not pid:
+                    continue
+                # Пропускаємо відсутні ще ДО завантаження описів/фото — це головна
+                # економія часу. Обережно: фільтруємо лише коли дані про наявність
+                # реально присутні у відповіді списку.
+                is_archive = str(p.get("is_archive", "0")) not in ("0", "False", "false", "")
+                has_stock_field = ("stocks" in p) or ("stocks_expected" in p)
+                if is_archive or (has_stock_field and stock_qty(p) == 0):
+                    skipped_oos += 1
+                    continue
+                p["categoryID"] = p.get("categoryID", cat_id)
+                pool[int(pid)] = p
+                cat_count += 1
             print(f"   [{i}/{len(cat_ids)}] Кат.{cat_id}: {offset + len(products)}", end="\r")
             if len(products) < 100:
                 break
             offset += 100
             await asyncio.sleep(0.4)
-        log(f"   [{i}/{len(cat_ids)}] Категорія {cat_id}: {cat_count} товарів")
+        log(f"   [{i}/{len(cat_ids)}] Категорія {cat_id}: {cat_count} в наявності")
 
     product_list = list(pool.values())
-    log(f"\n✅ Фаза 1: {len(product_list)} унікальних товарів")
+    log(f"\n✅ Фаза 1: {len(product_list)} товарів у наявності "
+        f"(пропущено відсутніх: {skipped_oos})")
 
     # Фаза 2: повна картка (опис) + характеристики + фото, паралельно по 3
     log("📋 Фаза 2: опис + характеристики + фото (паралельно по 3)...")
@@ -401,7 +424,7 @@ def load_cache() -> list:
 
 
 def apply_prices_to_cache(products: list, prices: dict) -> list:
-    updated = 0
+    updated = gone = 0
     for p in products:
         pid = int(p.get("productID") or p.get("id") or 0)
         if pid and pid in prices:
@@ -414,7 +437,13 @@ def apply_prices_to_cache(products: list, prices: dict) -> list:
             p["stocks_expected"]     = new["stocks_expected"]
             p["is_archive"]          = new["is_archive"]
             updated += 1
-    log(f"🔄 Оновлено цін: {updated}/{len(products)} товарів")
+        else:
+            # Товару більше немає у свіжому списку категорії → вважаємо відсутнім.
+            # Фільтр наявності в build_feed_xml його приховає.
+            p["stocks"] = []
+            p["is_archive"] = 1
+            gone += 1
+    log(f"🔄 Оновлено цін: {updated}/{len(products)} (зникли з наявності: {gone})")
     return products
 
 
@@ -429,8 +458,13 @@ def safe(text) -> str:
 
 
 def base_price(p: dict) -> float:
-    """Базова закупівельна ціна (грн) ДО націнки."""
-    for f in ["price_uah", "price", "retail_price_uah", "recommendable_price"]:
+    """
+    Базова закупівельна ціна в ГРИВНІ (ДО націнки).
+    ВАЖЛИВО: поле `price` у Brain — ціна у валюті постачальника (USD/EUR),
+    тому для гривневого XML його НЕ використовуємо, інакше ціна буде у ~37х занижена.
+    Беремо лише гривневі поля.
+    """
+    for f in ["price_uah", "retail_price_uah", "recommendable_price"]:
         try:
             v = float(str(p.get(f) or 0).replace(",", "."))
             if v > 0:
@@ -442,15 +476,19 @@ def base_price(p: dict) -> float:
 
 def stock_qty(p: dict) -> int:
     """
-    Реальна кількість. У Brain `stocks` — масив складів.
-    Документація не дає точних залишків через цей метод, тож
-    наявність = к-сть складів, де товар є (>0 → в наявності).
+    Чи є товар у наявності (і скільки умовно).
+    У Brain `stocks` — це масив ID складів, де товар присутній (напр. [1,2,3]),
+    а НЕ кількість штук. Точну кількість API не віддає.
+    Тому: товар у наявності ⇢ повертаємо умовну кількість для маркетплейсу.
+    Повертає 0, якщо товару немає на жодному складі.
     """
     stocks = p.get("stocks", [])
     if isinstance(stocks, list):
-        return len(stocks)
+        # є хоч один склад → в наявності. Кількість невідома → ставимо запас.
+        return 99 if len(stocks) > 0 else 0
     if isinstance(stocks, dict):
-        return sum(int(v) for v in stocks.values() if str(v).isdigit())
+        total = sum(int(v) for v in stocks.values() if str(v).isdigit())
+        return total if total > 0 else (99 if stocks else 0)
     if isinstance(stocks, (int, float)):
         return int(stocks)
     return 0
@@ -516,9 +554,9 @@ def build_feed_xml(
         if cat["categoryID"] not in full_needed:
             continue
         el = SubElement(cats_el, "category")
-        el.set("id", str(cat["categoryID"]))
+        el.set("id", cid_ext(cat["categoryID"]))
         if cat.get("parentID", 1) != 1:
-            el.set("parentId", str(cat["parentID"]))
+            el.set("parentId", cid_ext(cat["parentID"]))
         el.text = safe(cat["name"])
         n_cats += 1
 
@@ -539,12 +577,19 @@ def build_feed_xml(
         if bp <= 0:
             skipped += 1; continue
 
+        # ── ФІЛЬТР НАЯВНОСТІ: у XML потрапляють ТІЛЬКИ товари в наявності ──
+        # (архівні та з нульовим залишком пропускаємо повністю)
+        is_archive = str(p.get("is_archive", "0")) not in ("0", "False", "false", "")
+        qty = stock_qty(p)
+        if is_archive or qty == 0:
+            skipped += 1; continue
+
         offer = SubElement(offers_el, "offer")
-        offer.set("id", str(pid))
+        offer.set("id", pid_ext(pid))
 
         gid = build_group_id(p)
         if gid:
-            offer.set("group_id", gid)
+            offer.set("group_id", f"{ID_PREFIX}{gid}")
 
         SubElement(offer, "name").text = safe(p.get("name") or "")
 
@@ -561,7 +606,8 @@ def build_feed_xml(
         if rec > sell:
             SubElement(offer, "price_old").text = str(int(rec))
 
-        SubElement(offer, "categoryId").text = str(p.get("categoryID", ""))
+        if p.get("categoryID"):
+            SubElement(offer, "categoryId").text = cid_ext(p["categoryID"])
 
         # ── ФОТО ──
         pics = p.get("pictures", [])
@@ -591,15 +637,9 @@ def build_feed_xml(
             except Exception:
                 pass
 
-        # ── НАЯВНІСТЬ ──
-        is_archive = str(p.get("is_archive", "0")) not in ("0", "False", "false", "")
-        qty = stock_qty(p)
-        if is_archive or qty == 0:
-            offer.set("available", "false")
-            SubElement(offer, "stock_quantity").text = "0"
-        else:
-            offer.set("available", "true")
-            SubElement(offer, "stock_quantity").text = str(qty)
+        # ── НАЯВНІСТЬ (товар, що дійшов сюди, завжди в наявності) ──
+        offer.set("available", "true")
+        SubElement(offer, "stock_quantity").text = str(qty)
 
         # ── ОПИС: повний `description`, fallback на короткий ──
         desc = safe(p.get("description") or p.get("brief_description") or "")
