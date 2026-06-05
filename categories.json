@@ -1,6 +1,6 @@
 {
-  "generated": "2026-06-04 22:54",
-  "total": 2786,
+  "generated": "2026-06-05 16:15",
+  "total": 2787,
   "categories": [
     {
       "categoryID": 1181,
@@ -11624,6 +11624,12 @@
               "categoryID": 8545,
               "parentID": 8281,
               "name": "Надувні нарукавники",
+              "children": []
+            },
+            {
+              "categoryID": 10451,
+              "parentID": 8281,
+              "name": "Аксесуари для басейну",
               "children": []
             }
           ]
