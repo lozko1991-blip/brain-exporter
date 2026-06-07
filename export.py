@@ -300,8 +300,8 @@ async def fetch_all_products_full(
                 # Пропускаємо відсутні ще ДО завантаження описів/фото — це головна
                 # економія часу. Обережно: фільтруємо лише коли дані про наявність
                 # реально присутні у відповіді списку.
-                is_archive = str(p.get("is_archive", "0")) not in ("0", "False", "false", "")
-                has_stock_field = ("stocks" in p) or ("stocks_expected" in p)
+                is_archive = is_true(p.get("is_archive", False))
+                has_stock_field = ("stocks" in p) or ("available" in p)
                 if is_archive or (has_stock_field and stock_qty(p) == 0):
                     skipped_oos += 1
                     continue
@@ -381,6 +381,7 @@ async def fetch_prices_only(
                         "recommendable_price": p.get("recommendable_price", 0),
                         "stocks":              p.get("stocks", []),
                         "stocks_expected":     p.get("stocks_expected", {}),
+                        "available":           p.get("available", {}),
                         "is_archive":          p.get("is_archive", 0),
                     }
             print(f"   [{i}/{len(cat_ids)}] Кат.{cat_id}: {offset + len(products)}", end="\r")
@@ -435,13 +436,15 @@ def apply_prices_to_cache(products: list, prices: dict) -> list:
             p["recommendable_price"] = new["recommendable_price"]
             p["stocks"]              = new["stocks"]
             p["stocks_expected"]     = new["stocks_expected"]
+            p["available"]           = new["available"]
             p["is_archive"]          = new["is_archive"]
             updated += 1
         else:
             # Товару більше немає у свіжому списку категорії → вважаємо відсутнім.
-            # Фільтр наявності в build_feed_xml його приховає.
+            # Обнуляємо ВСІ поля наявності, щоб stock_qty() гарантовано дав 0.
             p["stocks"] = []
-            p["is_archive"] = 1
+            p["available"] = {}
+            p["is_archive"] = True
             gone += 1
     log(f"🔄 Оновлено цін: {updated}/{len(products)} (зникли з наявності: {gone})")
     return products
@@ -457,41 +460,105 @@ def safe(text) -> str:
     return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', str(text)).strip()
 
 
+def is_true(v) -> bool:
+    """
+    Нормалізація булевих полів Brain.
+    API може віддавати їх як JSON-boolean (true/false), число (1/0)
+    або рядок ("1"/"0"/"true"/"false"). Зводимо все до bool.
+    """
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "y", "t")
+    return False
+
+
+# Скільки штук ставити, коли товар у наявності, але точну кількість
+# (поле `available`) API не повернув. 99 завищувало залишки — ставимо 2.
+DEFAULT_STOCK = 2
+
+
 def base_price(p: dict) -> float:
     """
-    Базова закупівельна ціна в ГРИВНІ (ДО націнки).
-    ВАЖЛИВО: поле `price` у Brain — ціна у валюті постачальника (USD/EUR),
-    тому для гривневого XML його НЕ використовуємо, інакше ціна буде у ~37х занижена.
-    Беремо лише гривневі поля.
+    Базова ЗАКУПІВЕЛЬНА ціна в ГРИВНІ (ДО націнки).
+
+    ВАЖЛИВО:
+      • `price`            — у валюті постачальника (USD/EUR), НЕ використовуємо.
+      • `price_uah`        — оптова закупівельна в грн — це наша база.
+      • `retail_price_uah` / `recommendable_price` — це РОЗДРІБНІ ціни.
+        Їх НЕ можна підставляти у fallback бази, інакше на роздріб ще
+        накрутиться націнка і ціна злетить. Тому база = тільки price_uah.
     """
-    for f in ["price_uah", "retail_price_uah", "recommendable_price"]:
-        try:
-            v = float(str(p.get(f) or 0).replace(",", "."))
-            if v > 0:
-                return v
-        except Exception:
-            pass
+    try:
+        v = float(str(p.get("price_uah") or 0).replace(",", "."))
+        if v > 0:
+            return v
+    except Exception:
+        pass
     return 0.0
 
 
 def stock_qty(p: dict) -> int:
     """
-    Чи є товар у наявності (і скільки умовно).
-    У Brain `stocks` — це масив ID складів, де товар присутній (напр. [1,2,3]),
-    а НЕ кількість штук. Точну кількість API не віддає.
-    Тому: товар у наявності ⇢ повертаємо умовну кількість для маркетплейсу.
-    Повертає 0, якщо товару немає на жодному складі.
+    Кількість товару в наявності.
+
+    За документацією Brain:
+      • `stocks`    — масив ID складів, де товар є (напр. [1,2,3]).
+      • `available` — словник {складID: кількість} (напр. {"1":3,"2":1}).
+        Приходить ТІЛЬКИ для акаунтів зі статусом OWN_LOGISTICS_MODE.
+
+    Логіка:
+      1) Якщо є `available` з реальними кількостями → повертаємо їх суму.
+      2) Інакше якщо є хоч один склад у `stocks` → точну к-сть не знаємо,
+         ставимо DEFAULT_STOCK (2 шт).
+      3) Інакше 0 (товару немає).
     """
+    # 1) Точна кількість зі складів
+    available = p.get("available")
+    if isinstance(available, dict) and available:
+        total = 0
+        for v in available.values():
+            try:
+                total += int(float(str(v).replace(",", ".")))
+            except Exception:
+                pass
+        if total > 0:
+            return total
+        # available є, але всі нулі → товару фактично немає
+        # (падаємо нижче на перевірку stocks)
+
+    # 2) Є склади, але кількість невідома
     stocks = p.get("stocks", [])
     if isinstance(stocks, list):
-        # є хоч один склад → в наявності. Кількість невідома → ставимо запас.
-        return 99 if len(stocks) > 0 else 0
-    if isinstance(stocks, dict):
-        total = sum(int(v) for v in stocks.values() if str(v).isdigit())
-        return total if total > 0 else (99 if stocks else 0)
+        return DEFAULT_STOCK if len(stocks) > 0 else 0
     if isinstance(stocks, (int, float)):
-        return int(stocks)
+        return int(stocks) if stocks > 0 else 0
+    if isinstance(stocks, str) and stocks.strip().isdigit():
+        return int(stocks) if int(stocks) > 0 else 0
+
     return 0
+
+
+def vendor_name(p: dict) -> str:
+    """
+    Назва бренду для <vendor>.
+    У списку/картці товару є тільки числовий `vendorID`, а не назва.
+    Тому шукаємо назву серед характеристик (`options`): Brain зазвичай
+    віддає характеристику «Виробник»/«Бренд» з текстовою назвою.
+    Fallback: якщо колись у даних з'явиться текстове поле vendor — беремо його.
+    """
+    v = p.get("vendor")
+    if v and not str(v).isdigit():
+        return safe(str(v))
+    for opt in p.get("options", []) or []:
+        oname = str(opt.get("name") or opt.get("OptionName") or "").strip().lower()
+        if oname in ("виробник", "бренд", "производитель", "торгова марка", "торговельна марка"):
+            val = opt.get("value") or opt.get("ValueName")
+            if val:
+                return safe(str(val))
+    return ""
 
 
 def build_group_id(product: dict) -> str:
@@ -561,105 +628,132 @@ def build_feed_xml(
         n_cats += 1
 
     offers_el = SubElement(shop, "offers")
-    added = skipped = 0
+    added = skipped = errors = 0
 
     for p in products:
-        pid = (p.get("productID") or p.get("product_id") or p.get("ID") or p.get("id"))
-        if not pid:
-            skipped += 1; continue
-        pid = int(pid)
-
-        # фільтр по категоріях фіда
-        if p.get("categoryID") and int(p["categoryID"]) not in full_needed:
-            skipped += 1; continue
-
-        bp = base_price(p)
-        if bp <= 0:
-            skipped += 1; continue
-
-        # ── ФІЛЬТР НАЯВНОСТІ: у XML потрапляють ТІЛЬКИ товари в наявності ──
-        # (архівні та з нульовим залишком пропускаємо повністю)
-        is_archive = str(p.get("is_archive", "0")) not in ("0", "False", "false", "")
-        qty = stock_qty(p)
-        if is_archive or qty == 0:
-            skipped += 1; continue
-
-        offer = SubElement(offers_el, "offer")
-        offer.set("id", pid_ext(pid))
-
-        gid = build_group_id(p)
-        if gid:
-            offer.set("group_id", f"{ID_PREFIX}{gid}")
-
-        SubElement(offer, "name").text = safe(p.get("name") or "")
-
-        # ── ЦІНА З НАЦІНКОЮ ФІДА: bp × (1 + %/100) + грн ──
-        sell = round(bp * (1 + mp / 100) + mf, 0)
-        SubElement(offer, "price").text      = str(int(sell))
-        SubElement(offer, "currencyId").text = "UAH"
-
-        # стара ціна — рекомендована роздрібна, якщо вона вища
         try:
-            rec = float(str(p.get("retail_price_uah") or p.get("recommendable_price") or 0).replace(",", "."))
-        except Exception:
-            rec = 0
-        if rec > sell:
-            SubElement(offer, "price_old").text = str(int(rec))
+            pid = (p.get("productID") or p.get("product_id") or p.get("ID") or p.get("id"))
+            if not pid:
+                skipped += 1; continue
+            pid = int(pid)
 
-        if p.get("categoryID"):
-            SubElement(offer, "categoryId").text = cid_ext(p["categoryID"])
+            # фільтр по категоріях фіда
+            if p.get("categoryID") and int(p["categoryID"]) not in full_needed:
+                skipped += 1; continue
 
-        # ── ФОТО ──
-        pics = p.get("pictures", [])
-        if pics:
-            for pic in sorted(pics, key=lambda x: x.get("priority", 99)):
-                url = pic.get("full_image") or pic.get("large_image") or pic.get("medium_image")
-                if url and "no-photo" not in url:
-                    SubElement(offer, "picture").text = url
-        else:
-            for key in ["full_image", "large_image", "medium_image", "small_image"]:
-                if p.get(key) and "no-photo" not in str(p.get(key)):
-                    SubElement(offer, "picture").text = p[key]; break
+            bp = base_price(p)
+            if bp <= 0:
+                skipped += 1; continue
 
-        if p.get("vendor"):
-            SubElement(offer, "vendor").text = safe(str(p["vendor"]))
+            # ── ФІЛЬТР НАЯВНОСТІ: у XML потрапляють ТІЛЬКИ товари в наявності ──
+            # (архівні та з нульовим залишком пропускаємо повністю)
+            is_archive = is_true(p.get("is_archive", False))
+            qty = stock_qty(p)
+            if is_archive or qty == 0:
+                skipped += 1; continue
 
-        articul = p.get("articul") or p.get("product_code", "")
-        if articul:
-            SubElement(offer, "article").text = safe(str(articul))
-        if p.get("warranty"):
-            SubElement(offer, "warranty").text = f"{p['warranty']} міс."
-        if p.get("country"):
-            SubElement(offer, "country_of_origin").text = safe(str(p["country"]))
-        if p.get("weight"):
+            # Будуємо offer окремо; приєднаємо до дерева лише якщо зберемо
+            # повністю без помилок (інакше биті товари лишали б огризки в XML).
+            offer = Element("offer")
+            offer.set("id", pid_ext(pid))
+
+            gid = build_group_id(p)
+            if gid:
+                offer.set("group_id", f"{ID_PREFIX}{gid}")
+
+            SubElement(offer, "name").text = safe(p.get("name") or "")
+
+            # ── ЦІНА З НАЦІНКОЮ ФІДА: bp × (1 + %/100) + грн ──
+            sell = round(bp * (1 + mp / 100) + mf, 0)
+            SubElement(offer, "price").text      = str(int(sell))
+            SubElement(offer, "currencyId").text = "UAH"
+
+            # стара ціна — рекомендована роздрібна, якщо вона вища за нашу ціну
             try:
-                SubElement(offer, "weight").text = str(round(float(p["weight"]), 3))
+                rec = float(str(p.get("retail_price_uah") or p.get("recommendable_price") or 0).replace(",", "."))
             except Exception:
-                pass
+                rec = 0
+            if rec > sell:
+                SubElement(offer, "price_old").text = str(int(rec))
 
-        # ── НАЯВНІСТЬ (товар, що дійшов сюди, завжди в наявності) ──
-        offer.set("available", "true")
-        SubElement(offer, "stock_quantity").text = str(qty)
+            if p.get("categoryID"):
+                SubElement(offer, "categoryId").text = cid_ext(p["categoryID"])
 
-        # ── ОПИС: повний `description`, fallback на короткий ──
-        desc = safe(p.get("description") or p.get("brief_description") or "")
-        if desc:
-            d = SubElement(offer, "description")
-            d.text = f"__CDATA_OPEN__{desc}__CDATA_CLOSE__"
+            # ── ФОТО ──
+            pics = p.get("pictures", [])
+            if isinstance(pics, list) and pics:
+                for pic in sorted(pics, key=lambda x: x.get("priority", 99) if isinstance(x, dict) else 99):
+                    if not isinstance(pic, dict):
+                        continue
+                    url = pic.get("full_image") or pic.get("large_image") or pic.get("medium_image")
+                    if url and "no-photo" not in url:
+                        SubElement(offer, "picture").text = url
+            else:
+                for key in ["full_image", "large_image", "medium_image", "small_image"]:
+                    if p.get(key) and "no-photo" not in str(p.get(key)):
+                        SubElement(offer, "picture").text = p[key]; break
 
-        # ── ХАРАКТЕРИСТИКИ ──
-        for opt in p.get("options", []):
-            oname = safe(opt.get("OptionName") or opt.get("name_ua") or opt.get("name") or "")
-            oval  = safe(opt.get("ValueName")  or opt.get("value_ua") or opt.get("value") or "")
-            if oname and oval:
-                param = SubElement(offer, "param")
-                param.set("name", oname)
-                param.text = oval
+            # ── ВИРОБНИК (назва бренду, не числовий vendorID) ──
+            vn = vendor_name(p)
+            if vn:
+                SubElement(offer, "vendor").text = vn
 
-        if p.get("is_new") and str(p.get("is_new")) not in ("0", "False", "false"):
-            SubElement(offer, "is_new").text = "true"
+            articul = p.get("articul") or p.get("product_code", "")
+            if articul:
+                SubElement(offer, "article").text = safe(str(articul))
+            if p.get("warranty"):
+                SubElement(offer, "warranty").text = f"{p['warranty']} міс."
+            if p.get("country"):
+                SubElement(offer, "country_of_origin").text = safe(str(p["country"]))
+            # код УКТЗЕД (приходить у повній картці товару)
+            if p.get("koduktved"):
+                SubElement(offer, "uktzed").text = safe(str(p["koduktved"]))
+            if p.get("weight"):
+                try:
+                    w = round(float(str(p["weight"]).replace(",", ".")), 3)
+                    if w > 0:
+                        SubElement(offer, "weight").text = str(w)
+                except Exception:
+                    pass
 
-        added += 1
+            # ── НАЯВНІСТЬ (товар, що дійшов сюди, завжди в наявності) ──
+            offer.set("available", "true")
+            SubElement(offer, "stock_quantity").text = str(qty)
+
+            # ── ОПИС: повний `description`, fallback на короткий ──
+            desc = safe(p.get("description") or p.get("brief_description") or "")
+            if desc:
+                d = SubElement(offer, "description")
+                d.text = f"__CDATA_OPEN__{desc}__CDATA_CLOSE__"
+
+            # ── ХАРАКТЕРИСТИКИ ──
+            for opt in p.get("options", []) or []:
+                if not isinstance(opt, dict):
+                    continue
+                oname = safe(opt.get("OptionName") or opt.get("name_ua") or opt.get("name") or "")
+                oval  = safe(opt.get("ValueName")  or opt.get("value_ua") or opt.get("value") or "")
+                if oname and oval:
+                    param = SubElement(offer, "param")
+                    param.set("name", oname)
+                    param.text = oval
+
+            if is_true(p.get("is_new", False)):
+                SubElement(offer, "is_new").text = "true"
+
+            # Усе зібралось без помилок → додаємо товар у фід
+            offers_el.append(offer)
+            added += 1
+
+        except Exception as e:
+            # Один-два «биті» товари не повинні зривати весь фід —
+            # просто пропускаємо їх і рахуємо в errors.
+            errors += 1
+            _pid = p.get("productID") or p.get("id") or "?"
+            log(f"   ⚠️ Пропущено товар {_pid} через помилку: {e}")
+            continue
+
+    if errors:
+        log(f"   ⚠️ Фід '{feed['id']}': пропущено через помилки — {errors} товар(ів)")
 
     # запис
     output.parent.mkdir(parents=True, exist_ok=True)
