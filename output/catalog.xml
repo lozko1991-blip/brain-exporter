@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<yml_catalog date="2026-06-06 21:45">
+<yml_catalog date="2026-06-07 11:57">
   <shop>
     <name>AVi</name>
     <company>AVi</company>
@@ -47,6 +47,199 @@
       <category id="br9184" parentId="br8138">Напівкомбінезони</category>
       <category id="br9190" parentId="br8138">Комплекти верхнього одягу</category>
     </categories>
-    <offers/>
+    <offers>
+      <offer id="br100282916" available="true">
+        <name>Куртка дитяча Huppa STEVO 17990055 синій XS (4741468748399)</name>
+        <price>2868</price>
+        <currencyId>UAH</currencyId>
+        <price_old>3533</price_old>
+        <categoryId>br8144</categoryId>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/2/3/U0804623_main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/2/3/U0804623_2main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/2/3/U0804623_3main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/2/3/U0804623_4main.jpg</picture>
+        <article>4741468748399</article>
+        <warranty>0 міс.</warranty>
+        <country_of_origin>Естонія</country_of_origin>
+        <weight>0.447</weight>
+        <stock_quantity>99</stock_quantity>
+        <description><![CDATA[<p><b>Куртка демісезонна HUPPA STEVO, 17990055-90035, синій</b></p><ul><li>Комфортна, зручна, легка і тепла демісезонна куртка з капюшоном для хлопчика.</li><li>Куртка на блискавці. Має внутрішню планку (від підборіддя до грудей) 
+уздовж блискавки для додаткового захисту. <br></li><li>Комір-стійка суцільний з
+капюшоном та добре закриває область шиї. <br></li><li>Є додатковий захист підборіддя від блискавки. <br></li><li>Є вертикальні бічні кишені на
+ блискавках. <br></li><li>Капюшон форми "шолом", не з'ємний, з резинкою по краю. <br></li><li>Всі шви з додатковою обробкою. <br></li><li>Додані 
+світловідбиваючі елементи з високими показниками стандартів безпеки, що дозволяє бути помітним в темний та похмурий 
+період часу. <br></li><li>Має водо і брудовідштовхуюче покриття BIONIC-FINISH. <br></li><li>Куртка
+ комфортна, модна, стильна, зручна в експлуатації, вітронепроникна, має 
+високу зносостійкість, добре 
+утримує тепло в середині, виводить надлишкові пари зовні, "дихає", 
+створює для кожного свій індивідуальний мікроклімат, гіпоалергенна, 
+легка, проста у догляді, підходить для щоденного використання на вулиці в
+ прохолодний період, при температурному режим від +10 °C
+до -15 градусів морозу.</li></ul><p> </p><p><b>Склад</b></p><ul><li>Матеріал: тканина мембранна - 100% поліамід</li><li>Підкладка: 100% поліамід</li><li>Утеплювач: ECO DOWN (синтетичний пух) - 200 гр. - 100% поліестер</li><li>Водонепроникність: 5000 мм</li><li>Повітропроникність: 5000 г/м²/24 год</li><li>Ветронепродуваемость: да</li><li>Мінімальна температура: -15°C</li></ul><p> </p><p><b>Догляд</b></p><ul><li>Завжди дотримуватися вказівок та маркування, нанесених на табличку виробу</li><li>Перед пранням закрити всі замки та кріплення на липучках, вивернути навиворіт</li><li>Ручне прання у воді до 40 градусів</li><li>Не використовувати пом'якшувачі та відбілювачі</li><li>Не сушити в барабані, не сушити в сушильних шафах</li><li>Сушити за кімнатної температури</li><li>Не замочувати</li><li>Не прасувати</li></ul>                           <p></p>]]></description>
+        <param name="Тип">демісезонна</param>
+        <param name="Тип">легка</param>
+        <param name="Стать дитини">для хлопчика</param>
+        <param name="Виробник">Huppa</param>
+        <param name="Вік">13 - 15 років</param>
+        <param name="Зріст">158 - 164 см</param>
+        <param name="Сезон">демісезон</param>
+        <param name="Сезон">зима</param>
+        <param name="Основний матеріал">мембранна тканина</param>
+        <param name="Склад матеріалу">100% поліамід</param>
+        <param name="Матеріал підкладки">100% поліамід</param>
+        <param name="Утеплювач">eco down - синтетичний пух 200 г/м²</param>
+        <param name="Візерунок">без візерунка</param>
+        <param name="Колір">синій</param>
+        <param name="Застібка">блискавка</param>
+        <param name="Кишені">є</param>
+        <param name="Особливості">мінімальна температура -15°C</param>
+        <param name="Комплектація">куртка</param>
+        <param name="Країна виробництва">Естонія</param>
+      </offer>
+      <offer id="br100454610" available="true">
+        <name>Спортивний костюм дитячий A-Yugi флісовий (7294-03-146G-black)</name>
+        <price>1013</price>
+        <currencyId>UAH</currencyId>
+        <price_old>1200</price_old>
+        <categoryId>br8151</categoryId>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/2/4/U0996024_main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/2/4/U0996024_2main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/2/4/U0996024_3main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/2/4/U0996024_4main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/2/4/U0996024_5main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/2/4/U0996024_6main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/2/4/U0996024_7main.jpg</picture>
+        <article>7294-03-146G-black</article>
+        <warranty>0 міс.</warranty>
+        <country_of_origin>Туреччина</country_of_origin>
+        <weight>0.4</weight>
+        <stock_quantity>99</stock_quantity>
+        <description><![CDATA[<p><b>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <u>Теплий трикотажний костюм "мармур" на флісі </u></b><u><b>для дівчинки.</b></u></p><p><u><b><br></b></u></p><ul><li>Модний, стильненький, зручний та теплий костюм в спортивному стилі, кольору чорний мармур для дівчинки від тм&nbsp;A-Yugi.</li><li>Костюм
+ повномірний, зшитий з якісного, двониткового турецького трикотажу середньої 
+щільності <b><i>(95% бавовна)</i></b>, неймовірно м’якенького та дуже приємного на дотик, зворотня 
+сторона - щільненький флісовий начос.</li><li>Затишний, стильний <i><b>світшот </b></i>оверсайз
+ під гумку в поясі, з довгими рукавами та подовженою лінією плача. 
+Манжети рукавів, горловина і лінія низу оброблені подвійною, якісною, щільною 
+трикотажною «гумкою».&nbsp; <br></li><li>Зручні, теплі <i><b>штани</b></i>
+ на манжетах, з двома прорізними кишенями та еластичним широким 
+трикотажним поясом з основної тканини, забезпечать комфорт 
+при носінні та оптимальну посадку по фігурі. Манжети - якісна трикотажна гумка </li><li>Костюм прикрашений спереду акуратними стильними білосніжними кантами, вишитим в рельєфні шви. </li><li>Чудовий, зручний 
+та теплий, дуже красивий спортивний костюм зігріє вашу дитину в сиру, 
+холодну пору року, та подарує відчуття затишку та комфорту. </li></ul>]]></description>
+        <param name="Стать дитини">для дівчинки</param>
+        <param name="Вік">11 років</param>
+        <param name="Зріст">146 см</param>
+        <param name="Виробник">A-Yugi</param>
+        <param name="Сезон">осінь весна зима</param>
+        <param name="Довжина рукава">довгий</param>
+        <param name="Основний матеріал">трикотаж</param>
+        <param name="Основний матеріал">фліс</param>
+        <param name="Склад матеріалу">95% бавовна, 5% еластан</param>
+        <param name="Колір">чорний</param>
+        <param name="Візерунок">мармур</param>
+        <param name="Застібка">без застібки</param>
+        <param name="Декорування">канти</param>
+        <param name="Кишені">2 прорізні кишені в штанях</param>
+        <param name="Комплектація">світшот+штани</param>
+        <param name="Країна виробництва">Туреччина</param>
+      </offer>
+      <offer id="br546690" available="true">
+        <name>Колготки дитячі BNM з котиком (M0C0302-1121-1G-white)</name>
+        <price>142</price>
+        <currencyId>UAH</currencyId>
+        <price_old>159</price_old>
+        <categoryId>br8226</categoryId>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/3/9/U0333139_main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/3/9/U0333139_2main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/3/9/U0333139_3main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/3/9/U0333139_4main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/3/9/U0333139_5main.jpg</picture>
+        <article>M0C0302-1121-1G-white</article>
+        <warranty>0 міс.</warranty>
+        <country_of_origin>Туреччина</country_of_origin>
+        <weight>0.3</weight>
+        <stock_quantity>99</stock_quantity>
+        <description><![CDATA[<p>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <u><b>         Нарядні білі колготи з котиком для дівчинки від тм BNM.</b></u></p><p>Відмінні, однотонні, білі святкові колготи з котиком з дрібних страз для дівчинки.<br>Модель виконана з турецького трикотажу на основі натуральної бавовни, з додаванням поліаміду і невеликого % лайкри, для підвищення зносостійкості виробу.<br>М'які та приємні на дотик, з плоскими оверлочними швами, зручною посадкою і вив'язаними п’яточкою і носочком.<br>Колготи еластичні, тому будуть приємно облягати дитячу ніжку, повторюючи її анатомічну форму, не сковуючи при цьому рухів, і не викликаючи роздратування або алергічних реакцій.<br>Пояс щільний, еластичний з подвійної трикотажної гумки. На поясі вив'язаний розмір виробу (що говорить про його відмінну якість).<br>Колготи добре тягнуться, тримають форму, відмінно носяться і дуже приємні до тіла.<br>Чудова, модна модель для вашої красуні на будь-яке свято!</p><p><u>В одному розмірі є колготи з котиком з чорних, сріблястих і синіх страз.<br>Якщо ви віддаєте перевагу певному кольору страз, то при замовленні уточнюйте його наявність.</u></p><p>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<b>        Розмір /  вік  / зріст:<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;          • 1р.  / 1 - 2 роки / 84 - 94 см.</b></p><p>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <u><i>   Особливості догляду:</i></u><br>- Прати при температурі 30 ° С;<br>- Не рекомендується вибілювати;<br>- Не рекомендується віджимати і сушити в пральній машині;<br>- Не прасувати;<br>- Хім. чистка заборонена.</p><p>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;   <u><b>ТМ «BUONUMARE»</b></u> - відомий бренд, один з лідерів галузі, який виробляє повний асортимент одягу для дитячих ніжок. Всі панчішно-шкарпеткові вироби <b>«BUONUMARE» (BNM)</b> - виготовляємо виключно з натуральних матеріалів, що пройшли багаторівневий контроль якості.</p>]]></description>
+        <param name="Стать дитини">для дівчинки</param>
+        <param name="Виробник">BNM</param>
+        <param name="Вік">12 - 24 міс</param>
+        <param name="Зріст">84 - 94 см</param>
+        <param name="Сезон">всесезон</param>
+        <param name="Основний матеріал">бавовна</param>
+        <param name="Склад матеріалу">75% бавовна, 22% поліамід, 3% лайкра</param>
+        <param name="Колір">білий</param>
+        <param name="Візерунок">однотонний</param>
+        <param name="Декорування">стрази</param>
+        <param name="Кількість в упаковці">1 шт</param>
+        <param name="Країна виробництва">Туреччина</param>
+      </offer>
+      <offer id="br100151514" available="true">
+        <name>Напівкомбінезон дитячий Huppa SCOTT 2 26490212 чорний 134 (4741468820040)</name>
+        <price>2790</price>
+        <currencyId>UAH</currencyId>
+        <price_old>3174</price_old>
+        <categoryId>br9184</categoryId>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/2/1/U0666321_main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/2/1/U0666321_2main.jpg</picture>
+        <article>4741468820040</article>
+        <warranty>0 міс.</warranty>
+        <country_of_origin>Естонія</country_of_origin>
+        <weight>1.0</weight>
+        <stock_quantity>99</stock_quantity>
+        <description><![CDATA[<p><b>Штани лижні HUPPA SCOTT 2, 26490212-00086, чорний</b></p><ul><li>Наявність світловідбивних елементів для безпеки дитини</li><li>Основні шви проклеєні і не пропускають вологу</li><li>Укріплені деталі</li><li>Кишені на блискавці</li><li>Регульовані низи</li><li>Внутрішня снігозахист штанів</li><li>Відстібаються підтяжки</li><li>Додані петлі для підтяжок</li><li>Регульований пояс</li></ul><p> </p><p><b>Склад</b></p><ul><li>Матеріал: 100% поліестер</li><li>Підкладка: 100% поліестер: фліс, тафта</li><li>Утеплювач: 100% поліестер: 120 грам/м²</li><li>Водонепроникність: 10000 мм</li><li>Повітропроникність: 10000 г/м²/24 год</li><li>Ветронепродуваемость: да</li><li>Мінімальна температура: -25°C</li></ul><p> </p><p><b>Догляд</b></p><ul><li>Завжди дотримуватися вказівок та маркування, нанесених на табличку виробу</li><li>Перед пранням закрити всі замки та кріплення на липучках, вивернути навиворіт</li><li>Ручне прання у воді до 40 градусів</li><li>Не використовувати пом'якшувачі та відбілювачі</li><li>Не сушити в барабані, не сушити в сушильних шафах</li><li>Сушити за кімнатної температури</li><li>Не замочувати</li><li>Не прасувати</li></ul>]]></description>
+        <param name="Вид">штани</param>
+        <param name="Стать дитини">для хлопчика</param>
+        <param name="Виробник">Huppa</param>
+        <param name="Зріст">134 см</param>
+        <param name="Вік">8 - 9 років</param>
+        <param name="Сезон">зима</param>
+        <param name="Матеріал підкладки">тафта</param>
+        <param name="Утеплювач">120 г/м² huppa term (хуппа терм)</param>
+        <param name="Основний матеріал">мембранна тканина - 100% поліестер</param>
+        <param name="Склад матеріалу">100% поліестер</param>
+        <param name="Візерунок">без візерунка</param>
+        <param name="Застібка">блискавка та кнопки</param>
+        <param name="Кількість в упаковці">1 шт</param>
+        <param name="Особливості">мінімальна температура -25</param>
+        <param name="Колір">чорний</param>
+        <param name="Країна виробництва">Естонія</param>
+      </offer>
+      <offer id="br100492265" available="true">
+        <name>Шорти дитячі Joi трикотажні (H-0911-176B-black)</name>
+        <price>340</price>
+        <currencyId>UAH</currencyId>
+        <price_old>496</price_old>
+        <categoryId>br8232</categoryId>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/1/0/U1037510_main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/1/0/U1037510_2main.jpg</picture>
+        <picture>https://opt.brain.com.ua/static/images/prod_img/1/0/U1037510_3main.jpg</picture>
+        <article>H-0911-176B-black</article>
+        <warranty>0 міс.</warranty>
+        <country_of_origin>Туреччина</country_of_origin>
+        <weight>0.4</weight>
+        <stock_quantity>99</stock_quantity>
+        <description><![CDATA[<p>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <u><b>Стильні шорти-бермуди від тм «Joi» для хлопчика.</b></u></p><ul><li>Стильна,
+ зручна, подовжена однотонна трикотажна модель гладко-чорного кольору з контрастними білосніжними деталями, прикрашена ефектним акуратним принтовим 
+написом.</li><li>Шорти  прямі, зі зручною посадкою та еластичним широким
+  поясом на гумці. Пояс посилений додатково вставленою, широкою гумкою і
+  функціонуючим білосніжним круглим шнурком.</li><li>Спереду виконані дві накладні кишені з вертикальним прорізним входом із застібкою на блискавку.</li><li>Трикотаж  високої якості на основі натуральної бавовни <b><i>(77% бавовна)</i></b>, дуже приємний та гладенький на дотик. <br></li><li>Модель
+ легка, щільна, немаркого забарвлення, без проблем поєднується з 
+будь-якою футболкою або майкою, легко переться та бистро сохне, має 
+чудовий стильний зовнішній вигляд.</li></ul>]]></description>
+        <param name="Стать дитини">для хлопчика</param>
+        <param name="Вік">16 років</param>
+        <param name="Виробник">Joi</param>
+        <param name="Зріст">176 см</param>
+        <param name="Сезон">літо</param>
+        <param name="Основний матеріал">трикотаж</param>
+        <param name="Склад матеріалу">77% бавовна, 18% поліестер, 5% лайкра</param>
+        <param name="Колір">чорний</param>
+        <param name="Візерунок">без візерунка</param>
+        <param name="Декорування">принтовані слова</param>
+        <param name="Кишені">накладні</param>
+        <param name="Кількість в упаковці">1 шт</param>
+        <param name="Країна виробництва">Туреччина</param>
+      </offer>
+    </offers>
   </shop>
 </yml_catalog>
