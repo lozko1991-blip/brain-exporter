@@ -102,12 +102,37 @@ def load_feeds(base: dict) -> list:
     if FEEDS_FILE.exists():
         data = json.loads(FEEDS_FILE.read_text(encoding="utf-8"))
         feeds = data.get("feeds", data) if isinstance(data, dict) else data
+
+        # shop_url може лежати у feeds.json — він має пріоритет над config.json,
+        # але НЕ над змінною оточення SHOP_URL (її вже застосовано в base).
+        if isinstance(data, dict) and data.get("shop_url") and not os.environ.get("SHOP_URL"):
+            base["shop_url"] = data["shop_url"]
+
         out = []
+        seen_ids: dict[str, int] = {}   # для захисту від дублікатів id
         for f in feeds:
+            raw_id = str(f.get("id") or f.get("name") or "feed").strip() or "feed"
+
+            # ── ЗАХИСТ ВІД ДУБЛІКАТІВ ID ──
+            # Два фіди з однаковим id писали б у той самий файл і один
+            # мовчки затирав би інший. Робимо id унікальним: rozetka, rozetka-2...
+            fid = raw_id
+            if fid in seen_ids:
+                seen_ids[fid] += 1
+                fid = f"{raw_id}-{seen_ids[raw_id]}"
+                log(f"⚠️  Дубль id '{raw_id}' — перейменовано на '{fid}', "
+                    f"щоб не затерти {raw_id}.xml. Виправ id у feeds.json!")
+            else:
+                seen_ids[fid] = 1
+
+            cat_ids = [int(x) for x in f.get("category_ids", [])]
+            if not cat_ids:
+                log(f"⚠️  Фід '{fid}' не має жодної категорії — XML буде порожнім.")
+
             out.append({
-                "id":             str(f.get("id") or f.get("name") or "feed").strip(),
+                "id":             fid,
                 "name":           f.get("name") or base["shop_name"],
-                "category_ids":   [int(x) for x in f.get("category_ids", [])],
+                "category_ids":   cat_ids,
                 "markup_percent": float(f.get("markup_percent", 0) or 0),
                 "markup_fixed":   float(f.get("markup_fixed", 0) or 0),
                 "lang":           f.get("lang") or base["lang"],
@@ -852,15 +877,31 @@ async def main():
 
             # ── будуємо XML для КОЖНОГО фіда ──
             log(f"\n{'─' * 55}")
+            # shop_url міг бути перевизначений у feeds.json (load_feeds оновив base)
+            shop_url = base.get("shop_url", "https://example.com.ua")
             results = []
+            current_ids = set()
             for f in feeds:
                 out = OUTPUT_DIR / f"{f['id']}.xml"
                 stats = build_feed_xml(products, all_cats, f, shop_url, out)
                 stats["id"] = f["id"]; stats["file"] = str(out)
                 results.append(stats)
+                current_ids.add(f["id"])
                 warn = "  ⚠️ >180МБ!" if stats["size_mb"] > 180 else ""
                 log(f"  ✅ {f['id']}.xml — товарів {stats['offers']}, "
                     f"категорій {stats['categories']}, {stats['size_mb']}МБ{warn}")
+
+            # ── ПРИБИРАННЯ ОСИРОТІЛИХ ФІДІВ ──
+            # Якщо фід видалили з feeds.json, його старий XML лишається в репо
+            # і маркетплейс тягне застарілі дані. Видаляємо такі файли.
+            for old in OUTPUT_DIR.glob("*.xml"):
+                if old.stem not in current_ids:
+                    try:
+                        old.unlink()
+                        log(f"  🗑️  Видалено застарілий фід: {old.name} "
+                            f"(його більше немає у feeds.json)")
+                    except Exception as e:
+                        log(f"  ⚠️ Не вдалось видалити {old.name}: {e}")
 
             log(f"\n{'=' * 55}")
             log(f"✅ Готово! Режим: {mode.upper()} | Фідів: {len(results)}")
