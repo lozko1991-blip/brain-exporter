@@ -1,6 +1,6 @@
 {
-  "generated": "2026-06-12 20:13",
-  "total": 2787,
+  "generated": "2026-06-13 09:19",
+  "total": 2788,
   "categories": [
     {
       "categoryID": 1181,
@@ -1575,6 +1575,12 @@
               "categoryID": 8218,
               "parentID": 1290,
               "name": "Скло захисне",
+              "children": []
+            },
+            {
+              "categoryID": 10452,
+              "parentID": 1290,
+              "name": "Ремінець для смартфону",
               "children": []
             },
             {
