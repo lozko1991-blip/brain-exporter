@@ -1,0 +1,19 @@
+# Секрети — НІКОЛИ не комітити
+.env
+.env.*
+secrets.json
+secrets.local.json
+*.secret
+
+# Кеш товарів (великий, відновлюється автоматично)
+products_cache.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Системне
+.DS_Store
+Thumbs.db

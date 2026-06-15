@@ -142,6 +142,13 @@
   .fld input:focus, .fld select:focus { border-color: var(--blue); }
   .feed-tab .fmt { font-size: 9px; color: var(--violet); border: 1px solid var(--violet);
     border-radius: 4px; padding: 0 4px; letter-spacing: .04em; }
+
+  /* Кнопка «розбивати за статтю» у дереві (тільки для KASTA-фіда) */
+  .splitbtn { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--b2);
+    background: var(--s3); color: var(--t3); font-size: 11px; cursor: pointer; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; transition: all .15s; }
+  .splitbtn:hover { border-color: var(--violet); color: var(--violet); }
+  .splitbtn.on { background: var(--violet); border-color: var(--violet); color: #fff; }
   .markup-note { font-size: 11px; color: var(--t3); margin-top: 8px; line-height: 1.6; }
   .markup-note b { color: var(--green); }
 </style>
@@ -275,8 +282,9 @@ let activeFeed = 0;
 let GH = { account: "lozko1991-blip", repo: "brain-exporter" };
 
 function newFeed(name) {
-  return { id: slug(name), name, selected: new Set(),
-           markup_percent: 0, markup_fixed: 0, lang: 'ua', format: 'yml' };
+  return { id: slug(name), name, selected: new Set(), splitCats: new Set(),
+           markup_percent: 0, markup_fixed: 0, lang: 'ua', format: 'yml',
+           prefix_offer: 'br', prefix_category: 'br' };
 }
 function slug(s) {
   return (s||'feed').toLowerCase().trim()
@@ -384,6 +392,10 @@ function renderTree(nodes = treeData, container = null, depth = 0) {
 
     if (q && !node.name.toLowerCase().includes(q) && !hasKids) return;
 
+    const f0 = af();
+    const isKasta = !!f0 && f0.format === 'kasta';
+    const inSplit = !!f0 && f0.splitCats.has(node.categoryID);
+
     const row = document.createElement('div');
     row.className = 'crow' + (isOn ? ' sel' : '');
     row.innerHTML = `
@@ -391,6 +403,7 @@ function renderTree(nodes = treeData, container = null, depth = 0) {
       <span class="chk${isOn?' on':(isMid?' mid':'')}" onclick="check(${node.categoryID})" title="Вибрати">
         <svg viewBox="0 0 10 8" width="9"><path d="M1 4l3 3 5-6" stroke="white" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </span>
+      ${isKasta?`<button class="splitbtn${inSplit?' on':''}" onclick="toggleSplit(${node.categoryID},event)" title="Розбивати цю категорію на підкатегорії за статтю (♀/♂)">⚥</button>`:''}
       <span class="cname" onclick="${hasKids?`toggle(${node.categoryID})`:''}">
         <span class="cico">${hasKids?(isOpen?'📂':'📁'):'📄'}</span>
         <span class="ctxt">${node.name}</span>
@@ -424,6 +437,13 @@ function check(id) {
   ids.forEach(i => shouldRemove ? sel.delete(i) : sel.add(i));
   renderTree();
   updateConfig();
+}
+
+function toggleSplit(id, ev) {
+  ev.stopPropagation();
+  const s = af().splitCats;
+  s.has(id) ? s.delete(id) : s.add(id);
+  renderTree(); updateConfig();
 }
 
 function findNode(id, nodes) {
@@ -527,7 +547,7 @@ function renderFeedConfig() {
     </div>
     <div class="fld">
       <label>Формат експорту</label>
-      <select id="f-format" onchange="af().format=this.value;renderFeedConfig();updateConfig();renderFeedTabs()">
+      <select id="f-format" onchange="af().format=this.value;renderFeedConfig();renderTree();updateConfig();renderFeedTabs()">
         <option value="yml"${f.format!=='kasta'?' selected':''}>Rozetka / Prom (YML)</option>
         <option value="kasta"${f.format==='kasta'?' selected':''}>KASTA (поділ за статтю, 2 мови)</option>
       </select>
@@ -541,6 +561,16 @@ function renderFeedConfig() {
       <label>Націнка, грн (фікс)</label>
       <input id="f-fix" type="number" step="1" value="${f.markup_fixed}"
              oninput="af().markup_fixed=parseFloat(this.value)||0;updateConfig()">
+    </div>
+    <div class="fld">
+      <label>Префікс ID товару</label>
+      <input id="f-poff" value="${(f.prefix_offer||'br').replace(/"/g,'&quot;')}"
+             oninput="af().prefix_offer=slug(this.value);updateConfig()">
+    </div>
+    <div class="fld">
+      <label>Префікс ID категорії</label>
+      <input id="f-pcat" value="${(f.prefix_category||'br').replace(/"/g,'&quot;')}"
+             oninput="af().prefix_category=slug(this.value);updateConfig()">
     </div>`;
   document.getElementById('active-feed-name').textContent = f.name;
 }
@@ -556,15 +586,23 @@ function onFeedName(v) {
 function updateConfig() {
   const out = {
     shop_url: "https://avi.com.ua",
-    feeds: feeds.map(f => ({
-      id:             f.id,
-      name:           f.name,
-      format:         f.format || 'yml',
-      lang:           f.lang,
-      markup_percent: f.markup_percent,
-      markup_fixed:   f.markup_fixed,
-      category_ids:   [...f.selected].sort((a,b)=>a-b)
-    }))
+    feeds: feeds.map(f => {
+      const o = {
+        id:             f.id,
+        name:           f.name,
+        format:         f.format || 'yml',
+        lang:           f.lang,
+        markup_percent: f.markup_percent,
+        markup_fixed:   f.markup_fixed,
+        prefix_offer:    f.prefix_offer || 'br',
+        prefix_category: f.prefix_category || 'br',
+        category_ids:   [...f.selected].sort((a,b)=>a-b)
+      };
+      // розбивку за статтю пишемо лише для KASTA-фіда і лише якщо щось позначено
+      if (f.format === 'kasta' && f.splitCats.size)
+        o.split_category_ids = [...f.splitCats].sort((a,b)=>a-b);
+      return o;
+    })
   };
   document.getElementById('config-output').textContent = JSON.stringify(out, null, 2);
 
@@ -575,9 +613,10 @@ function updateConfig() {
   // приклад розрахунку націнки
   const ex = Math.round(1000 * (1 + f.markup_percent/100) + f.markup_fixed);
   const kastaHint = f.format === 'kasta'
-    ? `<br>🛍 <b style="color:var(--violet)">KASTA-формат:</b> дитячий одяг авто-розбивається на ` +
-      `«для дівчаток / для хлопців» за параметром «Стать дитини» (унісекс лишається в рідній категорії); ` +
-      `name_ua + name_ru, опис без HTML, old_price.`
+    ? `<br>🛍 <b style="color:var(--violet)">KASTA-формат:</b> name_ua + name_ru, опис без HTML, old_price. ` +
+      `Натисни <b style="color:var(--violet)">⚥</b> біля категорії, щоб розбивати її товари на ` +
+      `підкатегорії за статтю (♀/♂, дитяча чи доросла). Унісекс і непозначені категорії лишаються як є. ` +
+      `<b>Зараз позначено: ${f.splitCats.size}</b>`
     : '';
   document.getElementById('markup-note').innerHTML =
     `Приклад: товар з закупкою <b>1000 грн</b> → ціна продажу у фіді "${f.name}" = <b>${ex} грн</b> ` +

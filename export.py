@@ -138,6 +138,12 @@ def load_feeds(base: dict) -> list:
                 "lang":           f.get("lang") or base["lang"],
                 # формат фіда: "kasta" → KASTA-білдер, інакше Rozetka/Prom YML
                 "format":         str(f.get("format", "yml")).strip().lower(),
+                # батьківські категорії, де робити розбивку за статтю (тільки KASTA).
+                # порожньо → розбивки немає взагалі.
+                "split_category_ids": [int(x) for x in f.get("split_category_ids", [])],
+                # префікси ID (щоб не було колізій з іншими постачальниками на маркетплейсі)
+                "prefix_offer":    str(f.get("prefix_offer")    or "br").strip() or "br",
+                "prefix_category": str(f.get("prefix_category") or "br").strip() or "br",
             })
         log(f"📑 feeds.json: {len(out)} фід(ів)")
         return out
@@ -155,6 +161,9 @@ def load_feeds(base: dict) -> list:
         "markup_fixed":   float(cfg.get("markup_fixed", 0) or 0),
         "lang":           base["lang"],
         "format":         "yml",
+        "split_category_ids": [],
+        "prefix_offer":    "br",
+        "prefix_category": "br",
     }]
 
 
@@ -613,52 +622,61 @@ def build_group_id(product: dict) -> str:
 #  СТАТЬ ДИТИНИ (для поділу дитячого одягу) + ЧИСТКА ДЛЯ KASTA
 # ══════════════════════════════════════════════════════════════════
 
-# Назви характеристики статі в Brain — укр і рос (нормалізовані до lower).
-GENDER_PARAM_NAMES = {"стать дитини", "стать", "пол ребенка", "пол"}
+# Brain має ДВА типи характеристики статі:
+#   • дитячий одяг:      «Стать дитини» / «Пол ребенка» → дівчинка / хлопчик
+#   • дорослий одяг/взуття: «Стать» / «Пол» → жіноча / чоловіча / унісекс / дитячі
+GENDER_PARAM_CHILD = {"стать дитини", "пол ребенка"}
+GENDER_PARAM_ADULT = {"стать", "пол"}
+GENDER_PARAM_NAMES = GENDER_PARAM_CHILD | GENDER_PARAM_ADULT  # для виключення з <param>
 
-# Суфікси назв синтетичних категорій за статтю — залежно від мови фіда.
+# Суфікси назв синтетичних підкатегорій + суфікс до ID категорії.
+#   br8141 → br8141g (дівчатка) / br8141b (хлопці) / br8141w (жінки) / br8141m (чоловіки)
 GENDER_SUFFIX = {
-    "ua": {"girl": "для дівчаток", "boy": "для хлопців"},
-    "ru": {"girl": "для девочек",  "boy": "для мальчиков"},
+    "ua": {"girl": "для дівчаток", "boy": "для хлопців",
+           "woman": "жіночі",      "man": "чоловічі"},
+    "ru": {"girl": "для девочек",  "boy": "для мальчиков",
+           "woman": "женские",     "man": "мужские"},
 }
-# Суфікс до ID категорії: br8141 → br8141g (дівчатка) / br8141b (хлопці).
-GENDER_CID_SUFFIX = {"girl": "g", "boy": "b"}
+GENDER_CID_SUFFIX = {"girl": "g", "boy": "b", "woman": "w", "man": "m"}
 
 
 def detect_gender(p: dict):
     """
-    Стать товару за характеристикою «Стать дитини»/«Пол ребенка».
-    Повертає 'girl' | 'boy' | None (унісекс).
+    Стать товару → 'girl' | 'boy' | 'woman' | 'man' | None (унісекс).
 
-    Унісекс (None) — коли:
-      • параметра статі немає взагалі, АБО
-      • товар має ОБИДВІ статі (Brain часто дає «Стать дитини» двічі:
-        і «для дівчинки», і «для хлопчика») — такий товар не можна
-        однозначно віднести до однієї статі, лишаємо в рідній категорії.
-
-    Значення матчимо підрядком, обома мовами:
-    «для дівчинки», «дівчача», «для девочки», «девичий» → girl;
-    «для хлопчика», «для мальчика», «мальчиковый» → boy.
+    Дитячий параметр має пріоритет над дорослим. Унісекс (None), коли:
+      • параметра статі немає, АБО
+      • значення «унісекс» / «дитячі», АБО
+      • вказані ОБИДВІ статі одночасно (товар для всіх).
+    Значення матчимо підрядком, обома мовами.
     """
-    girl = boy = False
+    girl = boy = woman = man = False
     for opt in p.get("options", []) or []:
         if not isinstance(opt, dict):
             continue
         oname = str(opt.get("OptionName") or opt.get("name_ua")
                     or opt.get("name") or "").strip().lower()
-        if oname not in GENDER_PARAM_NAMES:
-            continue
         oval = str(opt.get("ValueName") or opt.get("value_ua")
                    or opt.get("value") or "").strip().lower()
-        if "дівчин" in oval or "дівчач" in oval or "девоч" in oval or "девич" in oval:
-            girl = True
-        elif "хлопч" in oval or "мальчик" in oval:
-            boy = True
-    if girl and not boy:
-        return "girl"
-    if boy and not girl:
-        return "boy"
-    return None  # обидві статі або жодної → унісекс
+        if oname in GENDER_PARAM_CHILD:
+            if "дівч" in oval or "девоч" in oval or "девич" in oval:
+                girl = True
+            elif "хлопч" in oval or "мальчик" in oval:
+                boy = True
+        elif oname in GENDER_PARAM_ADULT:
+            if "жіноч" in oval or "женс" in oval:
+                woman = True
+            elif "чолов" in oval or "мужс" in oval:
+                man = True
+            # «унісекс» / «дитячі» / «детск» → не стать, лишаємо унісекс
+    # дитяча стать має пріоритет над дорослою
+    if girl != boy:
+        return "girl" if girl else "boy"
+    if girl and boy:
+        return None
+    if woman != man:
+        return "woman" if woman else "man"
+    return None
 
 
 def clean_html(text, limit: int = 5000) -> str:
@@ -711,6 +729,11 @@ def build_feed_xml(
     lang = feed["lang"]
     mp   = feed["markup_percent"]
     mf   = feed["markup_fixed"]
+    # префікси ID per-feed (fallback на глобальний "br")
+    po = feed.get("prefix_offer")    or ID_PREFIX
+    pc = feed.get("prefix_category") or ID_PREFIX
+    def oid(x): return f"{po}{x}"
+    def cidx(x): return f"{pc}{x}"
     log(f"📝 Фід '{feed['id']}': категорій={len(needed)}, націнка +{mp}% +{mf}грн")
 
     now  = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -736,9 +759,9 @@ def build_feed_xml(
         if cat["categoryID"] not in full_needed:
             continue
         el = SubElement(cats_el, "category")
-        el.set("id", cid_ext(cat["categoryID"]))
+        el.set("id", cidx(cat["categoryID"]))
         if cat.get("parentID", 1) != 1:
-            el.set("parentId", cid_ext(cat["parentID"]))
+            el.set("parentId", cidx(cat["parentID"]))
         el.text = safe(cat["name"])
         n_cats += 1
 
@@ -770,11 +793,11 @@ def build_feed_xml(
             # Будуємо offer окремо; приєднаємо до дерева лише якщо зберемо
             # повністю без помилок (інакше биті товари лишали б огризки в XML).
             offer = Element("offer")
-            offer.set("id", pid_ext(pid))
+            offer.set("id", oid(pid))
 
             gid = build_group_id(p)
             if gid:
-                offer.set("group_id", f"{ID_PREFIX}{gid}")
+                offer.set("group_id", f"{po}{gid}")
 
             # повна картка тепер тягне обидві мови (ua_ru): для ru-фіда беремо
             # name_ru, інакше укр name. Так ru-фіди не ламаються.
@@ -795,7 +818,7 @@ def build_feed_xml(
                 SubElement(offer, "price_old").text = str(int(rec))
 
             if p.get("categoryID"):
-                SubElement(offer, "categoryId").text = cid_ext(p["categoryID"])
+                SubElement(offer, "categoryId").text = cidx(p["categoryID"])
 
             # ── ФОТО ──
             pics = p.get("pictures", [])
@@ -926,7 +949,30 @@ def build_kasta_feed_xml(
     mp   = feed["markup_percent"]
     mf   = feed["markup_fixed"]
     suffixes = GENDER_SUFFIX.get(lang, GENDER_SUFFIX["ua"])
-    log(f"📝 KASTA-фід '{feed['id']}': категорій={len(needed)}, націнка +{mp}% +{mf}грн")
+    # префікси ID per-feed (fallback на глобальний "br")
+    po = feed.get("prefix_offer")    or ID_PREFIX
+    pc = feed.get("prefix_category") or ID_PREFIX
+    def oid(x): return f"{po}{x}"
+    def cidx(x): return f"{pc}{x}"
+
+    # ── Категорії, де РОБИМО розбивку за статтю (вибрані батьки + їх нащадки) ──
+    # Порожньо → розбивки немає взагалі (усі товари в рідних категоріях).
+    split_scope = set()
+    for cid in feed.get("split_category_ids", []):
+        if cid in cat_map:
+            split_scope |= get_all_descendants(by_parent, cid)
+
+    def gender_of(p):
+        """Стать товару, але ТІЛЬКИ якщо його категорія в split_scope; інакше None."""
+        try:
+            if int(p.get("categoryID")) in split_scope:
+                return detect_gender(p)
+        except Exception:
+            pass
+        return None
+
+    log(f"📝 KASTA-фід '{feed['id']}': категорій={len(needed)}, "
+        f"націнка +{mp}% +{mf}грн, розбивка за статтю в {len(split_scope)} катег.")
 
     def in_scope(p) -> bool:
         cid = p.get("categoryID")
@@ -941,11 +987,11 @@ def build_kasta_feed_xml(
     for p in products:
         if not in_scope(p):
             continue
-        g = detect_gender(p)
+        g = gender_of(p)
         if g:
             gender_cats_used.add((int(p["categoryID"]), g))
-    log(f"   👫 Категорій зі статтю: {len(gender_cats_used)} "
-        f"(решта товарів лишаються в рідній категорії як унісекс)")
+    log(f"   👫 Підкатегорій за статтю: {len(gender_cats_used)} "
+        f"(товари поза розбивкою лишаються в рідній категорії)")
 
     now  = datetime.now().strftime("%Y-%m-%d %H:%M")
     root = Element("yml_catalog"); root.set("date", now)
@@ -970,9 +1016,9 @@ def build_kasta_feed_xml(
         if cat["categoryID"] not in full_needed:
             continue
         el = SubElement(cats_el, "category")
-        el.set("id", cid_ext(cat["categoryID"]))
+        el.set("id", cidx(cat["categoryID"]))
         if cat.get("parentID", 1) != 1:
-            el.set("parentId", cid_ext(cat["parentID"]))
+            el.set("parentId", cidx(cat["parentID"]))
         el.text = safe(cat["name"])
         n_cats += 1
 
@@ -980,8 +1026,8 @@ def build_kasta_feed_xml(
     # br8141 «Комбінезони» → br8141g «Комбінезони для дівчаток», br8141b «… для хлопців»
     for (orig_cid, g) in sorted(gender_cats_used):
         el = SubElement(cats_el, "category")
-        el.set("id", cid_ext(orig_cid) + GENDER_CID_SUFFIX[g])
-        el.set("parentId", cid_ext(orig_cid))
+        el.set("id", cidx(orig_cid) + GENDER_CID_SUFFIX[g])
+        el.set("parentId", cidx(orig_cid))
         base_name = safe(cat_map.get(orig_cid, {}).get("name", ""))
         el.text = f"{base_name} {suffixes[g]}".strip()
         n_cats += 1
@@ -1013,19 +1059,19 @@ def build_kasta_feed_xml(
                 skipped += 1; continue  # KASTA вимагає назву
 
             offer = Element("offer")
-            offer.set("id", pid_ext(pid))
+            offer.set("id", oid(pid))
             offer.set("available", "true")
 
             gid = build_group_id(p)
             if gid:
-                offer.set("group_id", f"{ID_PREFIX}{gid}")
+                offer.set("group_id", f"{po}{gid}")
 
             SubElement(offer, "currencyId").text = "UAH"
 
-            # ── КАТЕГОРІЯ: за статтю якщо параметр є, інакше рідна (унісекс) ──
+            # ── КАТЕГОРІЯ: за статтю лише якщо категорія в split_scope, інакше рідна ──
             orig_cid = int(p["categoryID"])
-            g = detect_gender(p)
-            cat_id_out = cid_ext(orig_cid) + (GENDER_CID_SUFFIX[g] if g else "")
+            g = gender_of(p)
+            cat_id_out = cidx(orig_cid) + (GENDER_CID_SUFFIX[g] if g else "")
             SubElement(offer, "categoryId").text = cat_id_out
 
             # ── ЦІНИ (KASTA: old_price СТРОГО > price) ──
