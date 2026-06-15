@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
 """
-Brain API → XML Exporter v3.0
-Два режими:
-  full  — повна вигрузка: товари + характеристики + фото (~40 хв)
-  quick — тільки ціни і наявність (~3 хв), використовує кеш
+Brain API → XML Exporter v4.0
+─────────────────────────────────────────────────────────────────
+Підтримує КІЛЬКА фідів (feeds.json) — по одному XML на маркетплейс,
+кожен зі своїми категоріями та своєю націнкою (% + грн).
+
+Режими:
+  full  — повна вигрузка: товари + характеристики + фото + повний опис
+  quick — тільки ціни і наявність (швидко), бере дані з кешу
 
 Запуск:
   EXPORT_MODE=full  python export.py
   EXPORT_MODE=quick python export.py
+
+Що змінилось проти v3:
+  • Кілька фідів з feeds.json (fallback на старий config.json)
+  • Націнка задається per-feed (percent + fixed), а не зашита в коді
+  • ВИПРАВЛЕНО опис: тепер качаємо повний `description` через /product/
+  • ВИПРАВЛЕНО наявність: рахуємо реальні залишки зі `stocks`
 """
 
 import asyncio
@@ -16,7 +26,6 @@ import json
 import os
 import re
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 from xml.dom.minidom import parseString
@@ -25,40 +34,137 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 import httpx
 
 # ══════════════════════════════════════════════════════════════════
-API_BASE     = "http://api.brain.com.ua"
-OUTPUT_DIR   = Path("output")
-CACHE_FILE   = Path("products_cache.json")
-CATS_FILE    = Path("categories.json")
+API_BASE   = "http://api.brain.com.ua"
+OUTPUT_DIR = Path("output")
+CACHE_FILE = Path("products_cache.json")
+CATS_FILE  = Path("categories.json")
+FEEDS_FILE = Path("feeds.json")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+# Префікс для ID товарів і категорій у XML — щоб уникнути колізій
+# з товарами інших постачальників на маркетплейсі. "br" = Brain.
+ID_PREFIX = "br"
+
+def pid_ext(pid) -> str:
+    """ID товару для XML: br12345"""
+    return f"{ID_PREFIX}{pid}"
+
+def cid_ext(cid) -> str:
+    """ID категорії для XML: br1181"""
+    return f"{ID_PREFIX}{cid}"
+
 
 # ══════════════════════════════════════════════════════════════════
-#  КОНФІГУРАЦІЯ
+#  ЛОГУВАННЯ
 # ══════════════════════════════════════════════════════════════════
 
-def load_config() -> dict:
+def log(msg: str):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+# ══════════════════════════════════════════════════════════════════
+#  КОНФІГ + ФІДИ
+# ══════════════════════════════════════════════════════════════════
+
+def load_base_config() -> dict:
+    """Спільні налаштування: логін, мова, режим, назва магазину."""
     cfg = {}
     if Path("config.json").exists():
         cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
 
-    if os.environ.get("BRAIN_LOGIN"):    cfg["login"]    = os.environ["BRAIN_LOGIN"]
-    if os.environ.get("BRAIN_PASSWORD"): cfg["password"] = os.environ["BRAIN_PASSWORD"]
-    if os.environ.get("LANG"):           cfg["lang"]     = os.environ["LANG"]
+    if os.environ.get("BRAIN_LOGIN"):    cfg["login"]     = os.environ["BRAIN_LOGIN"]
+    if os.environ.get("BRAIN_PASSWORD"): cfg["password"]  = os.environ["BRAIN_PASSWORD"]
+    if os.environ.get("LANG"):           cfg["lang"]      = os.environ["LANG"]
     if os.environ.get("SHOP_NAME"):      cfg["shop_name"] = os.environ["SHOP_NAME"]
     if os.environ.get("SHOP_URL"):       cfg["shop_url"]  = os.environ["SHOP_URL"]
     if os.environ.get("EXPORT_MODE"):    cfg["mode"]      = os.environ["EXPORT_MODE"]
 
-    raw_ids = os.environ.get("CATEGORY_IDS", "").strip()
-    if raw_ids:
-        cfg["category_ids"] = [int(x) for x in raw_ids.split(",") if x.strip().isdigit()]
-
-    cfg.setdefault("lang",         "ua")
-    cfg.setdefault("shop_name",    "Мій магазин")
-    cfg.setdefault("shop_url",     "https://example.com.ua")
-    cfg.setdefault("output_file",  "output/catalog.xml")
-    cfg.setdefault("category_ids", [])
-    cfg.setdefault("mode",         "quick")
+    cfg.setdefault("lang",      "ua")
+    cfg.setdefault("shop_name", "Мій магазин")
+    cfg.setdefault("shop_url",  "https://example.com.ua")
+    cfg.setdefault("mode",      "quick")
     return cfg
+
+
+def load_feeds(base: dict) -> list:
+    """
+    Повертає список фідів. Кожен фід:
+      {
+        "id": "rozetka",                 # → output/rozetka.xml
+        "name": "Rozetka",               # назва магазину в XML
+        "category_ids": [1181, 1191],    # вибрані категорії
+        "markup_percent": 20,            # +20%
+        "markup_fixed": 50,              # +50 грн
+        "lang": "ua"                     # (опц.) перевизначає базову мову
+      }
+    Якщо feeds.json немає — будуємо один фід зі старого config.json.
+    """
+    if FEEDS_FILE.exists():
+        data = json.loads(FEEDS_FILE.read_text(encoding="utf-8"))
+        feeds = data.get("feeds", data) if isinstance(data, dict) else data
+
+        # shop_url може лежати у feeds.json — він має пріоритет над config.json,
+        # але НЕ над змінною оточення SHOP_URL (її вже застосовано в base).
+        if isinstance(data, dict) and data.get("shop_url") and not os.environ.get("SHOP_URL"):
+            base["shop_url"] = data["shop_url"]
+
+        out = []
+        seen_ids: dict[str, int] = {}   # для захисту від дублікатів id
+        for f in feeds:
+            raw_id = str(f.get("id") or f.get("name") or "feed").strip() or "feed"
+
+            # ── ЗАХИСТ ВІД ДУБЛІКАТІВ ID ──
+            # Два фіди з однаковим id писали б у той самий файл і один
+            # мовчки затирав би інший. Робимо id унікальним: rozetka, rozetka-2...
+            fid = raw_id
+            if fid in seen_ids:
+                seen_ids[fid] += 1
+                fid = f"{raw_id}-{seen_ids[raw_id]}"
+                log(f"⚠️  Дубль id '{raw_id}' — перейменовано на '{fid}', "
+                    f"щоб не затерти {raw_id}.xml. Виправ id у feeds.json!")
+            else:
+                seen_ids[fid] = 1
+
+            cat_ids = [int(x) for x in f.get("category_ids", [])]
+            if not cat_ids:
+                log(f"⚠️  Фід '{fid}' не має жодної категорії — XML буде порожнім.")
+
+            out.append({
+                "id":             fid,
+                "name":           f.get("name") or base["shop_name"],
+                "category_ids":   cat_ids,
+                "markup_percent": float(f.get("markup_percent", 0) or 0),
+                "markup_fixed":   float(f.get("markup_fixed", 0) or 0),
+                "lang":           f.get("lang") or base["lang"],
+                # формат фіда: "kasta" → KASTA-білдер, інакше Rozetka/Prom YML
+                "format":         str(f.get("format", "yml")).strip().lower(),
+                # батьківські категорії, де робити розбивку за статтю (тільки KASTA).
+                # порожньо → розбивки немає взагалі.
+                "split_category_ids": [int(x) for x in f.get("split_category_ids", [])],
+                # префікси ID (щоб не було колізій з іншими постачальниками на маркетплейсі)
+                "prefix_offer":    str(f.get("prefix_offer")    or "br").strip() or "br",
+                "prefix_category": str(f.get("prefix_category") or "br").strip() or "br",
+            })
+        log(f"📑 feeds.json: {len(out)} фід(ів)")
+        return out
+
+    # ── Fallback: старий config.json як один фід ──
+    cfg = {}
+    if Path("config.json").exists():
+        cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
+    log("📑 feeds.json не знайдено — використовую config.json як один фід")
+    return [{
+        "id":             "catalog",
+        "name":           base["shop_name"],
+        "category_ids":   [int(x) for x in cfg.get("category_ids", [])],
+        "markup_percent": float(cfg.get("markup_percent", 0) or 0),
+        "markup_fixed":   float(cfg.get("markup_fixed", 0) or 0),
+        "lang":           base["lang"],
+        "format":         "yml",
+        "split_category_ids": [],
+        "prefix_offer":    "br",
+        "prefix_category": "br",
+    }]
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -66,7 +172,6 @@ def load_config() -> dict:
 # ══════════════════════════════════════════════════════════════════
 
 async def auth(client: httpx.AsyncClient, login: str, password: str) -> str:
-    """Пароль передається як MD5 хеш — не у відкритому вигляді!"""
     md5_pass = hashlib.md5(password.encode("utf-8")).hexdigest()
     log(f"🔐 Авторизація: {login}")
     resp = await client.post(
@@ -101,21 +206,26 @@ async def fetch_categories(client: httpx.AsyncClient, sid: str, lang: str) -> li
     return cats
 
 
-def get_all_descendants(cats: list, parent_id: int) -> set:
-    result = {parent_id}
-    for c in cats:
-        if c["parentID"] == parent_id:
-            result |= get_all_descendants(cats, c["categoryID"])
+def get_all_descendants(cats_by_parent: dict, parent_id: int) -> set:
+    """Усі нащадки категорії (включно з нею). Ітеративно — без рекурсії."""
+    result = set()
+    stack = [parent_id]
+    while stack:
+        cur = stack.pop()
+        if cur in result:
+            continue
+        result.add(cur)
+        stack.extend(cats_by_parent.get(cur, []))
     return result
 
 
 def save_categories_json(all_cats: list):
-    """Зберігає дерево категорій для сайту (index.html)."""
+    """Дерево категорій для адмінки (index.html)."""
     cat_map = {c["categoryID"]: {
         "categoryID": c["categoryID"],
         "parentID":   c["parentID"],
         "name":       c["name"],
-        "children":   []
+        "children":   [],
     } for c in all_cats}
 
     roots = []
@@ -133,7 +243,7 @@ def save_categories_json(all_cats: list):
             "total":      len(all_cats),
             "categories": roots,
         }, ensure_ascii=False, indent=2),
-        encoding="utf-8"
+        encoding="utf-8",
     )
     log(f"📂 categories.json збережено ({len(all_cats)} категорій)")
 
@@ -145,11 +255,9 @@ def save_categories_json(all_cats: list):
 async def fetch_products_page(
     client: httpx.AsyncClient, sid: str, cat_id: int,
     lang: str, offset: int, limit: int = 100
-) -> dict:
-    url = (
-        f"{API_BASE}/products/{cat_id}/{sid}"
-        f"?lang={lang}&limit={limit}&offset={offset}"
-    )
+) -> list:
+    url = (f"{API_BASE}/products/{cat_id}/{sid}"
+           f"?lang={lang}&limit={limit}&offset={offset}")
     for attempt in range(3):
         try:
             resp = await client.get(url, timeout=30)
@@ -157,27 +265,33 @@ async def fetch_products_page(
             if data.get("status") == 1:
                 result = data["result"]
                 if isinstance(result, list):
-                    return {"list": result, "count": offset + len(result) + (1 if len(result) == limit else 0)}
-                elif isinstance(result, dict):
-                    items = result.get("list") or result.get("products") or []
-                    count = int(result.get("count") or result.get("total") or len(items))
-                    return {"list": items, "count": count}
+                    return result
+                if isinstance(result, dict):
+                    return result.get("list") or result.get("products") or []
         except Exception as e:
             if attempt == 2:
-                log(f"   ⚠️ Помилка кат.{cat_id} offset={offset}: {e}")
+                log(f"   ⚠️ Кат.{cat_id} offset={offset}: {e}")
         await asyncio.sleep(1.5 ** attempt)
-    return {"list": [], "count": 0}
+    return []
 
 
-async def fetch_options(client: httpx.AsyncClient, sid: str, pid: int, lang: str) -> list:
+async def fetch_product_full(client: httpx.AsyncClient, sid: str, pid: int, lang: str) -> dict:
+    """
+    Повна картка товару. Дає те, чого немає у списку /products:
+    повний `description`, `koduktved`, а також `options` (характеристики).
+    Запитуємо `lang=ua_ru` — за ОДИН запит отримуємо обидві мови:
+      name / description / country / options (укр)
+      + name_ru / description_ru / country_ru / options_ru (рос).
+    Це дозволяє заповнити для KASTA і name_ua, і name_ru.
+    """
     try:
-        r = await client.get(f"{API_BASE}/product_options/{pid}/{sid}?lang={lang}", timeout=15)
+        r = await client.get(f"{API_BASE}/product/{pid}/{sid}?lang=ua_ru", timeout=20)
         d = r.json()
-        if d.get("status") == 1:
-            return d.get("result", [])
+        if d.get("status") == 1 and isinstance(d.get("result"), dict):
+            return d["result"]
     except Exception:
         pass
-    return []
+    return {}
 
 
 async def fetch_pictures(client: httpx.AsyncClient, sid: str, pid: int) -> list:
@@ -186,10 +300,9 @@ async def fetch_pictures(client: httpx.AsyncClient, sid: str, pid: int) -> list:
         d = r.json()
         if d.get("status") == 1:
             result = d.get("result", [])
-            # Brain повертає result як список фото напряму
             if isinstance(result, list):
                 return result
-            elif isinstance(result, dict):
+            if isinstance(result, dict):
                 return result.get("pictures", [])
     except Exception:
         pass
@@ -199,91 +312,98 @@ async def fetch_pictures(client: httpx.AsyncClient, sid: str, pid: int) -> list:
 async def fetch_all_products_full(
     client: httpx.AsyncClient, sid: str, cat_ids: list, lang: str
 ) -> list:
-    """
-    FULL режим: завантажує всі товари + характеристики + фото.
-    Зберігає кеш в products_cache.json для quick режиму.
-    """
+    """FULL: базові дані + (повна картка з описом) + характеристики + фото. Кешуємо."""
     pool: dict[int, dict] = {}
 
-    # Фаза 1: базові дані
+    # Фаза 1: базові дані (список товарів)
     log("\n📦 Фаза 1: базові дані товарів...")
+    skipped_oos = 0
     for i, cat_id in enumerate(cat_ids, 1):
         offset = 0
         cat_count = 0
         while True:
-            result   = await fetch_products_page(client, sid, cat_id, lang, offset)
-            products = result.get("list", [])
+            products = await fetch_products_page(client, sid, cat_id, lang, offset)
             if not products:
                 break
             for p in products:
                 pid = (p.get("productID") or p.get("product_id")
                        or p.get("ID") or p.get("id"))
-                if pid:
-                    pool[int(pid)] = p
-                    cat_count += 1
+                if not pid:
+                    continue
+                # Пропускаємо відсутні ще ДО завантаження описів/фото — це головна
+                # економія часу. Обережно: фільтруємо лише коли дані про наявність
+                # реально присутні у відповіді списку.
+                is_archive = is_true(p.get("is_archive", False))
+                has_stock_field = ("stocks" in p) or ("available" in p)
+                if is_archive or (has_stock_field and stock_qty(p) == 0):
+                    skipped_oos += 1
+                    continue
+                p["categoryID"] = p.get("categoryID", cat_id)
+                pool[int(pid)] = p
+                cat_count += 1
             print(f"   [{i}/{len(cat_ids)}] Кат.{cat_id}: {offset + len(products)}", end="\r")
             if len(products) < 100:
                 break
             offset += 100
             await asyncio.sleep(0.4)
-        log(f"   [{i}/{len(cat_ids)}] Категорія {cat_id}: {cat_count} товарів")
+        log(f"   [{i}/{len(cat_ids)}] Категорія {cat_id}: {cat_count} в наявності")
 
     product_list = list(pool.values())
-    log(f"\n✅ Фаза 1: {len(product_list)} унікальних товарів")
+    log(f"\n✅ Фаза 1: {len(product_list)} товарів у наявності "
+        f"(пропущено відсутніх: {skipped_oos})")
 
-    # Фаза 2: характеристики + фото паралельно по 3 (ліміт Brain 3 req/sec)
-    log("📋 Фаза 2: характеристики та фото (паралельно по 3)...")
+    # Фаза 2: повна картка (опис + характеристики, обидві мови) + фото.
+    # Раніше робили 3 запити/товар (product + product_options + pictures).
+    # Тепер 2: повна картка `product` уже містить `options`, тож окремий
+    # product_options не потрібен — це ~1.5× швидше. Більший batch_sz.
+    log("📋 Фаза 2: опис + характеристики + фото (паралельно по 4)...")
     total    = len(product_list)
-    batch_sz = 3  # 3 товари × 2 запити = 6 req/батч, пауза 2 сек = 3 req/sec
+    batch_sz = 4  # 4 товари × 2 запити = 8 req / 2 сек ≈ ліміт Brain
 
     for start in range(0, total, batch_sz):
         batch = product_list[start:start + batch_sz]
-        pids  = [p.get("productID") or p.get("id") for p in batch]
+        pids  = [int(p.get("productID") or p.get("id")) for p in batch]
 
-        # Паралельно для кожного товару: options + pictures одночасно
         all_results = await asyncio.gather(*[
             asyncio.gather(
-                fetch_options(client, sid, pid, lang),
+                fetch_product_full(client, sid, pid, lang),
                 fetch_pictures(client, sid, pid),
             )
             for pid in pids
         ])
 
-        for p, (opts, pics) in zip(batch, all_results):
-            p["options"]  = opts
+        for p, (full, pics) in zip(batch, all_results):
+            # Повна картка містить description(+_ru), country, options(+_ru) тощо
+            if full:
+                for k, v in full.items():
+                    # не затираємо ціни/наявність зі списку, якщо у повній порожньо
+                    if v not in (None, "", []):
+                        p[k] = v
+            # options_ru не використовуємо (params у KASTA — укр) → не роздуваємо кеш
+            p.pop("options_ru", None)
             p["pictures"] = pics
 
         done = min(start + batch_sz, total)
         pct  = int(done / total * 100)
         bar  = "█" * (pct // 5) + "░" * (20 - pct // 5)
         print(f"   [{bar}] {pct}% ({done}/{total})", end="\r")
-
-        # Пауза 2 сек: 3 товари × 2 запити = 6 req / 2 сек = 3 req/sec
         await asyncio.sleep(2)
 
     log(f"\n✅ Фаза 2 завершена")
-
-    # Зберігаємо кеш для quick режиму
     save_cache(product_list)
-
     return product_list
 
 
 async def fetch_prices_only(
     client: httpx.AsyncClient, sid: str, cat_ids: list, lang: str
 ) -> dict:
-    """
-    QUICK режим: завантажує тільки ціни і наявність.
-    Повертає словник: productID → {price, price_uah, retail_price_uah, available}
-    """
-    log("\n⚡ Quick режим: завантаження цін і наявності...")
+    """QUICK: тільки ціни і наявність. pid → {ціни, stocks, is_archive}."""
+    log("\n⚡ Quick: завантаження цін і наявності...")
     prices = {}
-
     for i, cat_id in enumerate(cat_ids, 1):
         offset = 0
         while True:
-            result   = await fetch_products_page(client, sid, cat_id, lang, offset)
-            products = result.get("list", [])
+            products = await fetch_products_page(client, sid, cat_id, lang, offset)
             if not products:
                 break
             for p in products:
@@ -291,20 +411,24 @@ async def fetch_prices_only(
                        or p.get("ID") or p.get("id"))
                 if pid:
                     prices[int(pid)] = {
-                        "price":             p.get("price", 0),
-                        "price_uah":         p.get("price_uah", 0),
-                        "retail_price_uah":  p.get("retail_price_uah", 0),
+                        "price":               p.get("price", 0),
+                        "price_uah":           p.get("price_uah", 0),
+                        "retail_price_uah":    p.get("retail_price_uah", 0),
                         "recommendable_price": p.get("recommendable_price", 0),
-                        "available":         p.get("available", {}),
-                        "is_archive":        p.get("is_archive", 0),
+                        # ВАЖЛИВО: не підставляти [] / {} за замовчуванням —
+                        # інакше товари акаунта без полів залишку «обнуляться».
+                        # None зберігає факт «поля немає» (stock_qty трактує як в наявності).
+                        "stocks":              p.get("stocks"),
+                        "stocks_expected":     p.get("stocks_expected", {}),
+                        "available":           p.get("available"),
+                        "is_archive":          p.get("is_archive", 0),
                     }
             print(f"   [{i}/{len(cat_ids)}] Кат.{cat_id}: {offset + len(products)}", end="\r")
             if len(products) < 100:
                 break
             offset += 100
             await asyncio.sleep(0.4)
-        log(f"   [{i}/{len(cat_ids)}] Категорія {cat_id}: {len([p for p in prices])} товарів")
-
+        log(f"   [{i}/{len(cat_ids)}] Категорія {cat_id}: {len(prices)} товарів (накопич.)")
     log(f"✅ Ціни отримані: {len(prices)} товарів")
     return prices
 
@@ -314,29 +438,25 @@ async def fetch_prices_only(
 # ══════════════════════════════════════════════════════════════════
 
 def save_cache(products: list):
-    """Зберігає повні дані товарів для quick режиму."""
-    cache = {
-        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "count":     len(products),
-        "products":  products,
-    }
     CACHE_FILE.write_text(
-        json.dumps(cache, ensure_ascii=False),
-        encoding="utf-8"
+        json.dumps({
+            "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "count":     len(products),
+            "products":  products,
+        }, ensure_ascii=False),
+        encoding="utf-8",
     )
     size_mb = CACHE_FILE.stat().st_size / 1024 / 1024
     log(f"💾 Кеш збережено: {len(products)} товарів ({size_mb:.1f} МБ)")
 
 
 def load_cache() -> list:
-    """Завантажує кеш товарів."""
     if not CACHE_FILE.exists():
         return []
     try:
         data = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
         products = data.get("products", [])
-        generated = data.get("generated", "?")
-        log(f"📦 Кеш завантажено: {len(products)} товарів (створено {generated})")
+        log(f"📦 Кеш завантажено: {len(products)} товарів (створено {data.get('generated','?')})")
         return products
     except Exception as e:
         log(f"⚠️ Помилка читання кешу: {e}")
@@ -344,25 +464,33 @@ def load_cache() -> list:
 
 
 def apply_prices_to_cache(products: list, prices: dict) -> list:
-    """Оновлює ціни і наявність в кешованих товарах."""
-    updated = 0
+    updated = gone = 0
     for p in products:
         pid = int(p.get("productID") or p.get("id") or 0)
         if pid and pid in prices:
             new = prices[pid]
-            p["price"]              = new["price"]
-            p["price_uah"]          = new["price_uah"]
-            p["retail_price_uah"]   = new["retail_price_uah"]
+            p["price"]               = new["price"]
+            p["price_uah"]           = new["price_uah"]
+            p["retail_price_uah"]    = new["retail_price_uah"]
             p["recommendable_price"] = new["recommendable_price"]
-            p["available"]          = new["available"]
-            p["is_archive"]         = new["is_archive"]
+            p["stocks"]              = new["stocks"]
+            p["stocks_expected"]     = new["stocks_expected"]
+            p["available"]           = new["available"]
+            p["is_archive"]          = new["is_archive"]
             updated += 1
-    log(f"🔄 Оновлено цін: {updated}/{len(products)} товарів")
+        else:
+            # Товару більше немає у свіжому списку категорії → вважаємо відсутнім.
+            # Обнуляємо ВСІ поля наявності, щоб stock_qty() гарантовано дав 0.
+            p["stocks"] = []
+            p["available"] = {}
+            p["is_archive"] = True
+            gone += 1
+    log(f"🔄 Оновлено цін: {updated}/{len(products)} (зникли з наявності: {gone})")
     return products
 
 
 # ══════════════════════════════════════════════════════════════════
-#  XML ГЕНЕРАТОР
+#  ДОПОМІЖНІ
 # ══════════════════════════════════════════════════════════════════
 
 def safe(text) -> str:
@@ -371,195 +499,668 @@ def safe(text) -> str:
     return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', str(text)).strip()
 
 
+def is_true(v) -> bool:
+    """
+    Нормалізація булевих полів Brain.
+    API може віддавати їх як JSON-boolean (true/false), число (1/0)
+    або рядок ("1"/"0"/"true"/"false"). Зводимо все до bool.
+    """
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "y", "t")
+    return False
+
+
+# Скільки штук ставити, коли товар у наявності, але точну кількість
+# (поле `available`) API не повернув. 99 завищувало залишки — ставимо 2.
+DEFAULT_STOCK = 2
+
+
+def base_price(p: dict) -> float:
+    """
+    Базова ЗАКУПІВЕЛЬНА ціна в ГРИВНІ (ДО націнки).
+
+    ВАЖЛИВО:
+      • `price`            — у валюті постачальника (USD/EUR), НЕ використовуємо.
+      • `price_uah`        — оптова закупівельна в грн — це наша база.
+      • `retail_price_uah` / `recommendable_price` — це РОЗДРІБНІ ціни.
+        Їх НЕ можна підставляти у fallback бази, інакше на роздріб ще
+        накрутиться націнка і ціна злетить. Тому база = тільки price_uah.
+    """
+    try:
+        v = float(str(p.get("price_uah") or 0).replace(",", "."))
+        if v > 0:
+            return v
+    except Exception:
+        pass
+    return 0.0
+
+
+def stock_qty(p: dict) -> int:
+    """
+    Кількість товару в наявності.
+
+    За документацією Brain:
+      • `stocks`    — масив ID складів, де товар є (напр. [1,2,3]).
+      • `available` — словник {складID: кількість} (напр. {"1":3,"2":1}).
+        Приходить ТІЛЬКИ для акаунтів зі статусом OWN_LOGISTICS_MODE.
+
+    Логіка:
+      1) Якщо є `available` з реальними кількостями → повертаємо їх суму.
+      2) Інакше якщо є хоч один склад у `stocks` → точну к-сть не знаємо,
+         ставимо DEFAULT_STOCK (2 шт).
+      3) Інакше 0 (товару немає).
+    """
+    # 1) Точна кількість зі складів
+    available = p.get("available")
+    if isinstance(available, dict) and available:
+        total = 0
+        for v in available.values():
+            try:
+                total += int(float(str(v).replace(",", ".")))
+            except Exception:
+                pass
+        if total > 0:
+            return total
+        # available є, але всі нулі → товару фактично немає
+        return 0
+
+    # 2) Склади (масив ID складів). ВАЖЛИВО відрізняти:
+    #    • stocks ВІДСУТНІЙ у відповіді (None) — акаунт не віддає залишки →
+    #      кількість невідома, але товар є в каталозі з ціною → DEFAULT_STOCK.
+    #    • stocks = [] (порожній список ПРИСУТНІЙ) — товару немає на жодному
+    #      складі → 0 (так само ставить apply_prices_to_cache для зниклих).
+    stocks = p.get("stocks")
+    if isinstance(stocks, list):
+        return DEFAULT_STOCK if len(stocks) > 0 else 0
+    if isinstance(stocks, (int, float)):
+        return int(stocks) if stocks > 0 else 0
+    if isinstance(stocks, str) and stocks.strip().isdigit():
+        return int(stocks) if int(stocks) > 0 else 0
+
+    # 3) Ні available, ні stocks акаунт не надав → вважаємо в наявності.
+    return DEFAULT_STOCK
+
+
+def vendor_name(p: dict) -> str:
+    """
+    Назва бренду для <vendor>.
+    У списку/картці товару є тільки числовий `vendorID`, а не назва.
+    Тому шукаємо назву серед характеристик (`options`): Brain зазвичай
+    віддає характеристику «Виробник»/«Бренд» з текстовою назвою.
+    Fallback: якщо колись у даних з'явиться текстове поле vendor — беремо його.
+    """
+    v = p.get("vendor")
+    if v and not str(v).isdigit():
+        return safe(str(v))
+    for opt in p.get("options", []) or []:
+        oname = str(opt.get("name") or opt.get("OptionName") or "").strip().lower()
+        if oname in ("виробник", "бренд", "производитель", "торгова марка", "торговельна марка"):
+            val = opt.get("value") or opt.get("ValueName")
+            if val:
+                return safe(str(val))
+    return ""
+
+
 def build_group_id(product: dict) -> str:
+    """
+    Групування варіантів. Brain не дає офіційного поля,
+    тож обережно: ріжемо лише явні суфікси розмірів одягу/взуття.
+    Числові суфікси НЕ ріжемо (вони часто = модель, а не розмір).
+    """
     articul = safe(str(product.get("articul") or product.get("product_code") or ""))
     if not articul:
         return ""
-    group = re.sub(r'[-/_\s]*(XS|S|M|L|XL|XXL|XXXL|\d{2,3})$', '', articul, flags=re.I)
-    group = re.sub(r'\(\d{2,3}\)$', '', group).strip()
-    return group or articul
+    group = re.sub(r'[-/_\s]+(XS|S|M|L|XL|XXL|XXXL|XXXXL)$', '', articul, flags=re.I)
+    return group if group and group != articul else ""
 
 
-def build_xml(
-    products: list, all_cats: list, needed_ids: set,
-    output: Path, shop_name: str, shop_url: str, lang: str,
+# ══════════════════════════════════════════════════════════════════
+#  СТАТЬ ДИТИНИ (для поділу дитячого одягу) + ЧИСТКА ДЛЯ KASTA
+# ══════════════════════════════════════════════════════════════════
+
+# Brain має ДВА типи характеристики статі:
+#   • дитячий одяг:      «Стать дитини» / «Пол ребенка» → дівчинка / хлопчик
+#   • дорослий одяг/взуття: «Стать» / «Пол» → жіноча / чоловіча / унісекс / дитячі
+GENDER_PARAM_CHILD = {"стать дитини", "пол ребенка"}
+GENDER_PARAM_ADULT = {"стать", "пол"}
+GENDER_PARAM_NAMES = GENDER_PARAM_CHILD | GENDER_PARAM_ADULT  # для виключення з <param>
+
+# Суфікси назв синтетичних підкатегорій + суфікс до ID категорії.
+#   br8141 → br8141g (дівчатка) / br8141b (хлопці) / br8141w (жінки) / br8141m (чоловіки)
+GENDER_SUFFIX = {
+    "ua": {"girl": "для дівчаток", "boy": "для хлопців",
+           "woman": "жіночі",      "man": "чоловічі"},
+    "ru": {"girl": "для девочек",  "boy": "для мальчиков",
+           "woman": "женские",     "man": "мужские"},
+}
+GENDER_CID_SUFFIX = {"girl": "g", "boy": "b", "woman": "w", "man": "m"}
+
+
+def detect_gender(p: dict):
+    """
+    Стать товару → 'girl' | 'boy' | 'woman' | 'man' | None (унісекс).
+
+    Дитячий параметр має пріоритет над дорослим. Унісекс (None), коли:
+      • параметра статі немає, АБО
+      • значення «унісекс» / «дитячі», АБО
+      • вказані ОБИДВІ статі одночасно (товар для всіх).
+    Значення матчимо підрядком, обома мовами.
+    """
+    girl = boy = woman = man = False
+    for opt in p.get("options", []) or []:
+        if not isinstance(opt, dict):
+            continue
+        oname = str(opt.get("OptionName") or opt.get("name_ua")
+                    or opt.get("name") or "").strip().lower()
+        oval = str(opt.get("ValueName") or opt.get("value_ua")
+                   or opt.get("value") or "").strip().lower()
+        if oname in GENDER_PARAM_CHILD:
+            if "дівч" in oval or "девоч" in oval or "девич" in oval:
+                girl = True
+            elif "хлопч" in oval or "мальчик" in oval:
+                boy = True
+        elif oname in GENDER_PARAM_ADULT:
+            if "жіноч" in oval or "женс" in oval:
+                woman = True
+            elif "чолов" in oval or "мужс" in oval:
+                man = True
+            # «унісекс» / «дитячі» / «детск» → не стать, лишаємо унісекс
+    # дитяча стать має пріоритет над дорослою
+    if girl != boy:
+        return "girl" if girl else "boy"
+    if girl and boy:
+        return None
+    if woman != man:
+        return "woman" if woman else "man"
+    return None
+
+
+def clean_html(text, limit: int = 5000) -> str:
+    """
+    KASTA не приймає HTML в описі і ріже до 5000 символів.
+    Знімаємо теги, розкодовуємо сутності, схлопуємо пробіли, обрізаємо.
+    """
+    if not text:
+        return ""
+    t = re.sub(r"<[^>]+>", " ", str(text))
+    t = (t.replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">")
+          .replace("&quot;", '"').replace("&apos;", "'").replace("&amp;", "&"))
+    t = re.sub(r"\s+", " ", t).strip()
+    return safe(t)[:limit]
+
+
+# Стоп-слова KASTA у назві/бренді (конкуренти/маркетплейси) — прибираємо.
+KASTA_STOPWORDS = ("rozetka", "розетка", "prom", "пром", "express",
+                   "expres", "meest", "kasta", "каста")
+
+
+def strip_stopwords(text) -> str:
+    if not text:
+        return ""
+    out = str(text)
+    for w in KASTA_STOPWORDS:
+        out = re.sub(re.escape(w), "", out, flags=re.I)
+    return re.sub(r"\s+", " ", out).strip()
+
+
+# ══════════════════════════════════════════════════════════════════
+#  XML ГЕНЕРАТОР (один фід)
+# ══════════════════════════════════════════════════════════════════
+
+def build_feed_xml(
+    products: list, all_cats: list, feed: dict,
+    shop_url: str, output: Path,
 ) -> dict:
-    log("📝 Генерація XML (формат Rozetka YML)...")
+    cat_map     = {c["categoryID"]: c for c in all_cats}
+    by_parent: dict[int, list] = {}
+    for c in all_cats:
+        by_parent.setdefault(c.get("parentID", 1), []).append(c["categoryID"])
+
+    # Які категорії потрібні цьому фіду (вибрані + усі нащадки)
+    needed = set()
+    for cid in feed["category_ids"]:
+        if cid in cat_map:
+            needed |= get_all_descendants(by_parent, cid)
+
+    lang = feed["lang"]
+    mp   = feed["markup_percent"]
+    mf   = feed["markup_fixed"]
+    # префікси ID per-feed (fallback на глобальний "br")
+    po = feed.get("prefix_offer")    or ID_PREFIX
+    pc = feed.get("prefix_category") or ID_PREFIX
+    def oid(x): return f"{po}{x}"
+    def cidx(x): return f"{pc}{x}"
+    log(f"📝 Фід '{feed['id']}': категорій={len(needed)}, націнка +{mp}% +{mf}грн")
+
     now  = datetime.now().strftime("%Y-%m-%d %H:%M")
-    root = Element("yml_catalog")
-    root.set("date", now)
-
+    root = Element("yml_catalog"); root.set("date", now)
     shop = SubElement(root, "shop")
-    SubElement(shop, "name").text    = safe(shop_name)
-    SubElement(shop, "company").text = safe(shop_name)
+    SubElement(shop, "name").text    = safe(feed["name"])
+    SubElement(shop, "company").text = safe(feed["name"])
     SubElement(shop, "url").text     = safe(shop_url)
-
     cur = SubElement(SubElement(shop, "currencies"), "currency")
     cur.set("id", "UAH"); cur.set("rate", "1")
 
-    # Категорії + батьки для ієрархії
-    cat_map     = {c["categoryID"]: c for c in all_cats}
-    full_needed = set(needed_ids)
-    for cid in list(needed_ids):
+    # Категорії + усі батьки для коректної ієрархії
+    full_needed = set(needed)
+    for cid in list(needed):
         pid = cat_map.get(cid, {}).get("parentID", 1)
         while pid and pid != 1 and pid in cat_map:
             full_needed.add(pid)
             pid = cat_map.get(pid, {}).get("parentID", 1)
 
     cats_el = SubElement(shop, "categories")
+    n_cats = 0
     for cat in all_cats:
         if cat["categoryID"] not in full_needed:
             continue
         el = SubElement(cats_el, "category")
-        el.set("id", str(cat["categoryID"]))
+        el.set("id", cidx(cat["categoryID"]))
         if cat.get("parentID", 1) != 1:
-            el.set("parentId", str(cat["parentID"]))
+            el.set("parentId", cidx(cat["parentID"]))
         el.text = safe(cat["name"])
+        n_cats += 1
 
-    # Націнка — константи винесені сюди один раз
-    MARKUP_PERCENT      = 1.6   # ціна продажу × 1.6 + 40
-    MARKUP_FIXED        = 40
-    MARKUP_OLD_PERCENT  = 1.5   # стара ціна × 1.5 + 40
-    MARKUP_OLD_MIN      = 1.15  # якщо немає рекомендованої → +15%
-
-    # Товари
     offers_el = SubElement(shop, "offers")
-    added = skipped = 0
+    added = skipped = errors = 0
 
     for p in products:
-        pid = (p.get("productID") or p.get("product_id")
-               or p.get("ID") or p.get("id"))
-        if not pid:
-            skipped += 1
-            continue
-        pid = int(pid)
-
-        # Ціна — беремо price_uah (гривня)
-        price = 0.0
-        for f in ["price_uah", "price", "retail_price_uah", "recommendable_price"]:
-            try:
-                v = float(str(p.get(f) or 0).replace(",", "."))
-                if v > 0:
-                    price = v
-                    break
-            except Exception:
-                pass
-        if price <= 0:
-            skipped += 1
-            continue
-
-        offer = SubElement(offers_el, "offer")
-        offer.set("id", str(pid))
-
-        group_id = build_group_id(p)
-        if group_id:
-            offer.set("group_id", group_id)
-
-        # Назва — Brain повертає `name` вже на потрібній мові (ua/ru)
-        # При lang=ua Brain віддає name_ua, при lang=ru — name
-        name = safe(p.get("name") or "")
-        SubElement(offer, "name").text = name
-
-        # Ціна з націнкою
-        sell_price = round(price * MARKUP_PERCENT + MARKUP_FIXED, 0)
-        SubElement(offer, "price").text      = str(int(sell_price))
-        SubElement(offer, "currencyId").text = "UAH"
-
-        # Стара ціна
         try:
-            rec = float(str(
-                p.get("retail_price_uah") or p.get("recommendable_price") or 0
-            ).replace(",", "."))
-            old_sell = round(rec * MARKUP_OLD_PERCENT + MARKUP_FIXED, 0) if rec > 0 else 0
-        except Exception:
-            old_sell = 0
+            pid = (p.get("productID") or p.get("product_id") or p.get("ID") or p.get("id"))
+            if not pid:
+                skipped += 1; continue
+            pid = int(pid)
 
-        if old_sell > sell_price:
-            SubElement(offer, "price_old").text = str(int(old_sell))
-        else:
-            # Немає рекомендованої — показуємо +15% як стара ціна
-            SubElement(offer, "price_old").text = str(int(round(sell_price * MARKUP_OLD_MIN, 0)))
+            # фільтр по категоріях фіда
+            if p.get("categoryID") and int(p["categoryID"]) not in full_needed:
+                skipped += 1; continue
 
-        SubElement(offer, "categoryId").text = str(p.get("categoryID", ""))
+            bp = base_price(p)
+            if bp <= 0:
+                skipped += 1; continue
 
-        # Фото — всі фото з product_pictures в якості full_image
-        # Якщо product_pictures не завантажились — fallback на фото з products
-        pics = p.get("pictures", [])
-        if pics:
-            pics_sorted = sorted(pics, key=lambda x: x.get("priority", 99))
-            for pic in pics_sorted:
-                url = (pic.get("full_image") or pic.get("large_image")
-                       or pic.get("medium_image"))
-                if url and "no-photo" not in url:
-                    SubElement(offer, "picture").text = url
-        else:
-            # Fallback — хоча б одне фото з основного запиту
-            for key in ["full_image", "large_image", "medium_image", "small_image"]:
-                if p.get(key) and "no-photo" not in str(p.get(key)):
-                    SubElement(offer, "picture").text = p[key]
-                    break
+            # ── ФІЛЬТР НАЯВНОСТІ: у XML потрапляють ТІЛЬКИ товари в наявності ──
+            # (архівні та з нульовим залишком пропускаємо повністю)
+            is_archive = is_true(p.get("is_archive", False))
+            qty = stock_qty(p)
+            if is_archive or qty == 0:
+                skipped += 1; continue
 
-        if p.get("vendor"):
-            SubElement(offer, "vendor").text = safe(str(p["vendor"]))
+            # Будуємо offer окремо; приєднаємо до дерева лише якщо зберемо
+            # повністю без помилок (інакше биті товари лишали б огризки в XML).
+            offer = Element("offer")
+            offer.set("id", oid(pid))
 
-        articul = p.get("articul") or p.get("product_code", "")
-        if articul:
-            SubElement(offer, "article").text = safe(str(articul))
+            gid = build_group_id(p)
+            if gid:
+                offer.set("group_id", f"{po}{gid}")
 
-        if p.get("warranty"):
-            SubElement(offer, "warranty").text = f"{p['warranty']} міс."
+            # повна картка тепер тягне обидві мови (ua_ru): для ru-фіда беремо
+            # name_ru, інакше укр name. Так ru-фіди не ламаються.
+            nm = (p.get("name_ru") if lang == "ru" else None) or p.get("name") or ""
+            SubElement(offer, "name").text = safe(nm)
 
-        if p.get("country"):
-            SubElement(offer, "country_of_origin").text = safe(str(p["country"]))
+            # ── ЦІНА З НАЦІНКОЮ ФІДА: bp × (1 + %/100) + грн ──
+            sell = round(bp * (1 + mp / 100) + mf, 0)
+            SubElement(offer, "price").text      = str(int(sell))
+            SubElement(offer, "currencyId").text = "UAH"
 
-        if p.get("weight"):
+            # стара ціна — рекомендована роздрібна, якщо вона вища за нашу ціну
             try:
-                SubElement(offer, "weight").text = str(round(float(p["weight"]), 3))
+                rec = float(str(p.get("retail_price_uah") or p.get("recommendable_price") or 0).replace(",", "."))
             except Exception:
-                pass
+                rec = 0
+            if rec > sell:
+                SubElement(offer, "price_old").text = str(int(rec))
 
-        # Наявність
-        is_archive = str(p.get("is_archive", "0")) not in ("0", "False", "false", "")
-        avail = p.get("available", {})
-        if isinstance(avail, dict):
-            qty = sum(int(v) for v in avail.values() if str(v).isdigit())
-        elif isinstance(avail, (int, float)):
-            qty = int(avail)
-        else:
-            qty = 0
+            if p.get("categoryID"):
+                SubElement(offer, "categoryId").text = cidx(p["categoryID"])
 
-        if is_archive or qty == 0:
-            offer.set("available", "false")
-            SubElement(offer, "stock_quantity").text = "0"
-        else:
+            # ── ФОТО ──
+            pics = p.get("pictures", [])
+            if isinstance(pics, list) and pics:
+                for pic in sorted(pics, key=lambda x: x.get("priority", 99) if isinstance(x, dict) else 99):
+                    if not isinstance(pic, dict):
+                        continue
+                    url = pic.get("full_image") or pic.get("large_image") or pic.get("medium_image")
+                    if url and "no-photo" not in url:
+                        SubElement(offer, "picture").text = url
+            else:
+                for key in ["full_image", "large_image", "medium_image", "small_image"]:
+                    if p.get(key) and "no-photo" not in str(p.get(key)):
+                        SubElement(offer, "picture").text = p[key]; break
+
+            # ── ВИРОБНИК (назва бренду, не числовий vendorID) ──
+            vn = vendor_name(p)
+            if vn:
+                SubElement(offer, "vendor").text = vn
+
+            articul = p.get("articul") or p.get("product_code", "")
+            if articul:
+                SubElement(offer, "article").text = safe(str(articul))
+            if p.get("warranty"):
+                SubElement(offer, "warranty").text = f"{p['warranty']} міс."
+            if p.get("country"):
+                SubElement(offer, "country_of_origin").text = safe(str(p["country"]))
+            # код УКТЗЕД (приходить у повній картці товару)
+            if p.get("koduktved"):
+                SubElement(offer, "uktzed").text = safe(str(p["koduktved"]))
+            if p.get("weight"):
+                try:
+                    w = round(float(str(p["weight"]).replace(",", ".")), 3)
+                    if w > 0:
+                        SubElement(offer, "weight").text = str(w)
+                except Exception:
+                    pass
+
+            # ── НАЯВНІСТЬ (товар, що дійшов сюди, завжди в наявності) ──
             offer.set("available", "true")
-            SubElement(offer, "stock_quantity").text = "1"
+            SubElement(offer, "stock_quantity").text = str(qty)
 
-        # Опис — brief_description це повний опис товару в Brain
-        desc = safe(p.get("brief_description") or "")
-        if desc:
-            SubElement(offer, "description_ua").text = f"<![CDATA[{desc}]]>"
+            # ── ОПИС: повний `description`, fallback на короткий (мовно-залежно) ──
+            desc_src = ((p.get("description_ru") or p.get("brief_description_ru"))
+                        if lang == "ru" else None)
+            desc = safe(desc_src or p.get("description") or p.get("brief_description") or "")
+            if desc:
+                d = SubElement(offer, "description")
+                d.text = f"__CDATA_OPEN__{desc}__CDATA_CLOSE__"
 
-        # Характеристики
-        for opt in p.get("options", []):
-            oname = safe(opt.get("OptionName") or opt.get("name_ua") or opt.get("name") or "")
-            oval  = safe(opt.get("ValueName")  or opt.get("value_ua") or opt.get("value") or "")
-            if oname and oval:
+            # ── ХАРАКТЕРИСТИКИ ──
+            for opt in p.get("options", []) or []:
+                if not isinstance(opt, dict):
+                    continue
+                oname = safe(opt.get("OptionName") or opt.get("name_ua") or opt.get("name") or "")
+                oval  = safe(opt.get("ValueName")  or opt.get("value_ua") or opt.get("value") or "")
+                if oname and oval:
+                    param = SubElement(offer, "param")
+                    param.set("name", oname)
+                    param.text = oval
+
+            if is_true(p.get("is_new", False)):
+                SubElement(offer, "is_new").text = "true"
+
+            # Усе зібралось без помилок → додаємо товар у фід
+            offers_el.append(offer)
+            added += 1
+
+        except Exception as e:
+            # Один-два «биті» товари не повинні зривати весь фід —
+            # просто пропускаємо їх і рахуємо в errors.
+            errors += 1
+            _pid = p.get("productID") or p.get("id") or "?"
+            log(f"   ⚠️ Пропущено товар {_pid} через помилку: {e}")
+            continue
+
+    if errors:
+        log(f"   ⚠️ Фід '{feed['id']}': пропущено через помилки — {errors} товар(ів)")
+
+    # запис
+    output.parent.mkdir(parents=True, exist_ok=True)
+    raw = tostring(root, encoding="unicode")
+    try:
+        pretty = parseString(f'<?xml version="1.0" encoding="UTF-8"?>{raw}').toprettyxml(indent="  ")
+        lines = pretty.splitlines()
+        if lines[0].startswith("<?xml"):
+            lines[0] = '<?xml version="1.0" encoding="UTF-8"?>'
+        final = "\n".join(lines)
+    except Exception:
+        final = f'<?xml version="1.0" encoding="UTF-8"?>\n{raw}'
+
+    # реальні CDATA: ElementTree екранує весь текст (включно з HTML у описі).
+    # Розгортаємо плейсхолдери у справжні CDATA і знімаємо екранування ВСЕРЕДИНІ них.
+    def _unescape_cdata(m):
+        inner = m.group(1)
+        inner = (inner.replace("&lt;", "<").replace("&gt;", ">")
+                      .replace("&quot;", '"').replace("&apos;", "'")
+                      .replace("&amp;", "&"))
+        return f"<![CDATA[{inner}]]>"
+
+    final = final.replace("&lt;![CDATA[", "__CDATA_OPEN__").replace("]]&gt;", "__CDATA_CLOSE__")
+    final = re.sub(r'__CDATA_OPEN__(.*?)__CDATA_CLOSE__', _unescape_cdata, final, flags=re.S)
+
+    output.write_text(final, encoding="utf-8")
+    size_mb = output.stat().st_size / 1024 / 1024
+    return {"offers": added, "skipped": skipped, "categories": n_cats, "size_mb": round(size_mb, 2)}
+
+
+# ══════════════════════════════════════════════════════════════════
+#  XML ГЕНЕРАТОР — KASTA (name_ua, опис без HTML, old_price, поділ за статтю)
+# ══════════════════════════════════════════════════════════════════
+
+def build_kasta_feed_xml(
+    products: list, all_cats: list, feed: dict,
+    shop_url: str, output: Path,
+) -> dict:
+    cat_map = {c["categoryID"]: c for c in all_cats}
+    by_parent: dict[int, list] = {}
+    for c in all_cats:
+        by_parent.setdefault(c.get("parentID", 1), []).append(c["categoryID"])
+
+    needed = set()
+    for cid in feed["category_ids"]:
+        if cid in cat_map:
+            needed |= get_all_descendants(by_parent, cid)
+
+    lang = feed["lang"]
+    mp   = feed["markup_percent"]
+    mf   = feed["markup_fixed"]
+    suffixes = GENDER_SUFFIX.get(lang, GENDER_SUFFIX["ua"])
+    # префікси ID per-feed (fallback на глобальний "br")
+    po = feed.get("prefix_offer")    or ID_PREFIX
+    pc = feed.get("prefix_category") or ID_PREFIX
+    def oid(x): return f"{po}{x}"
+    def cidx(x): return f"{pc}{x}"
+
+    # ── Категорії, де РОБИМО розбивку за статтю (вибрані батьки + їх нащадки) ──
+    # Порожньо → розбивки немає взагалі (усі товари в рідних категоріях).
+    split_scope = set()
+    for cid in feed.get("split_category_ids", []):
+        if cid in cat_map:
+            split_scope |= get_all_descendants(by_parent, cid)
+
+    def gender_of(p):
+        """Стать товару, але ТІЛЬКИ якщо його категорія в split_scope; інакше None."""
+        try:
+            if int(p.get("categoryID")) in split_scope:
+                return detect_gender(p)
+        except Exception:
+            pass
+        return None
+
+    log(f"📝 KASTA-фід '{feed['id']}': категорій={len(needed)}, "
+        f"націнка +{mp}% +{mf}грн, розбивка за статтю в {len(split_scope)} катег.")
+
+    def in_scope(p) -> bool:
+        cid = p.get("categoryID")
+        try:
+            return bool(cid) and int(cid) in needed
+        except Exception:
+            return False
+
+    # ── Пас 1: які пари (категорія, стать) реально зустрічаються —
+    #    щоб створити рівно ті дочірні категорії за статтю, що потрібні ──
+    gender_cats_used: set[tuple[int, str]] = set()
+    for p in products:
+        if not in_scope(p):
+            continue
+        g = gender_of(p)
+        if g:
+            gender_cats_used.add((int(p["categoryID"]), g))
+    log(f"   👫 Підкатегорій за статтю: {len(gender_cats_used)} "
+        f"(товари поза розбивкою лишаються в рідній категорії)")
+
+    now  = datetime.now().strftime("%Y-%m-%d %H:%M")
+    root = Element("yml_catalog"); root.set("date", now)
+    shop = SubElement(root, "shop")
+    SubElement(shop, "name").text    = safe(feed["name"])
+    SubElement(shop, "company").text = safe(feed["name"])
+    SubElement(shop, "url").text     = safe(shop_url)
+    cur = SubElement(SubElement(shop, "currencies"), "currency")
+    cur.set("id", "UAH"); cur.set("rate", "1")
+
+    # повний набір категорій (вибрані + усі батьки)
+    full_needed = set(needed)
+    for cid in list(needed):
+        pid = cat_map.get(cid, {}).get("parentID", 1)
+        while pid and pid != 1 and pid in cat_map:
+            full_needed.add(pid)
+            pid = cat_map.get(pid, {}).get("parentID", 1)
+
+    cats_el = SubElement(shop, "categories")
+    n_cats = 0
+    for cat in all_cats:
+        if cat["categoryID"] not in full_needed:
+            continue
+        el = SubElement(cats_el, "category")
+        el.set("id", cidx(cat["categoryID"]))
+        if cat.get("parentID", 1) != 1:
+            el.set("parentId", cidx(cat["parentID"]))
+        el.text = safe(cat["name"])
+        n_cats += 1
+
+    # ── синтетичні дочірні категорії за статтю ──
+    # br8141 «Комбінезони» → br8141g «Комбінезони для дівчаток», br8141b «… для хлопців»
+    for (orig_cid, g) in sorted(gender_cats_used):
+        el = SubElement(cats_el, "category")
+        el.set("id", cidx(orig_cid) + GENDER_CID_SUFFIX[g])
+        el.set("parentId", cidx(orig_cid))
+        base_name = safe(cat_map.get(orig_cid, {}).get("name", ""))
+        el.text = f"{base_name} {suffixes[g]}".strip()
+        n_cats += 1
+
+    offers_el = SubElement(shop, "offers")
+    added = skipped = errors = no_photo = 0
+
+    for p in products:
+        try:
+            pid = (p.get("productID") or p.get("product_id") or p.get("ID") or p.get("id"))
+            if not pid:
+                skipped += 1; continue
+            pid = int(pid)
+            if not in_scope(p):
+                skipped += 1; continue
+
+            bp = base_price(p)
+            if bp <= 0:
+                skipped += 1; continue
+
+            is_archive = is_true(p.get("is_archive", False))
+            qty = stock_qty(p)
+            if is_archive or qty == 0:
+                skipped += 1; continue
+
+            nm_ua = strip_stopwords(safe(p.get("name") or ""))
+            nm_ru = strip_stopwords(safe(p.get("name_ru") or ""))
+            if not (nm_ua or nm_ru):
+                skipped += 1; continue  # KASTA вимагає назву
+
+            offer = Element("offer")
+            offer.set("id", oid(pid))
+            offer.set("available", "true")
+
+            gid = build_group_id(p)
+            if gid:
+                offer.set("group_id", f"{po}{gid}")
+
+            SubElement(offer, "currencyId").text = "UAH"
+
+            # ── КАТЕГОРІЯ: за статтю лише якщо категорія в split_scope, інакше рідна ──
+            orig_cid = int(p["categoryID"])
+            g = gender_of(p)
+            cat_id_out = cidx(orig_cid) + (GENDER_CID_SUFFIX[g] if g else "")
+            SubElement(offer, "categoryId").text = cat_id_out
+
+            # ── ЦІНИ (KASTA: old_price СТРОГО > price) ──
+            sell = round(bp * (1 + mp / 100) + mf, 0)
+            SubElement(offer, "price").text = str(int(sell))
+            try:
+                rec = float(str(p.get("retail_price_uah")
+                                or p.get("recommendable_price") or 0).replace(",", "."))
+            except Exception:
+                rec = 0
+            if rec > sell:
+                SubElement(offer, "old_price").text = str(int(rec))
+
+            # ── ФОТО (мінімум 1, максимум 20) ──
+            n_pics = 0
+            pics = p.get("pictures", [])
+            if isinstance(pics, list) and pics:
+                for pic in sorted(pics, key=lambda x: x.get("priority", 99) if isinstance(x, dict) else 99):
+                    if n_pics >= 20:
+                        break
+                    if not isinstance(pic, dict):
+                        continue
+                    url = pic.get("full_image") or pic.get("large_image") or pic.get("medium_image")
+                    if url and "no-photo" not in url:
+                        SubElement(offer, "picture").text = url; n_pics += 1
+            if n_pics == 0:
+                for key in ["full_image", "large_image", "medium_image", "small_image"]:
+                    if p.get(key) and "no-photo" not in str(p.get(key)):
+                        SubElement(offer, "picture").text = p[key]; n_pics += 1; break
+            if n_pics == 0:
+                no_photo += 1; skipped += 1; continue  # без фото KASTA відхилить
+
+            vn = strip_stopwords(vendor_name(p))
+            if vn:
+                SubElement(offer, "vendor").text = safe(vn)
+
+            articul = p.get("articul") or p.get("product_code", "")
+            if articul:
+                SubElement(offer, "article").text = safe(str(articul))
+
+            # назва — обидві мови (KASTA воліє name_ua; name_ru — бонус)
+            if nm_ua:
+                SubElement(offer, "name_ua").text = nm_ua
+            if nm_ru:
+                SubElement(offer, "name_ru").text = nm_ru
+
+            # опис — обидві мови, без HTML, ≤5000 символів
+            desc_ua = clean_html(p.get("description") or p.get("brief_description") or "")
+            if desc_ua:
+                SubElement(offer, "description_ua").text = desc_ua
+            desc_ru = clean_html(p.get("description_ru") or p.get("brief_description_ru") or "")
+            if desc_ru:
+                SubElement(offer, "description_ru").text = desc_ru
+
+            SubElement(offer, "stock_quantity").text = str(qty)
+
+            # ── ХАРАКТЕРИСТИКИ (стать НЕ дублюємо — вона вже у категорії) ──
+            for opt in p.get("options", []) or []:
+                if not isinstance(opt, dict):
+                    continue
+                oname = safe(opt.get("OptionName") or opt.get("name_ua") or opt.get("name") or "")
+                oval  = safe(opt.get("ValueName")  or opt.get("value_ua") or opt.get("value") or "")
+                if not (oname and oval):
+                    continue
+                if oname.strip().lower() in GENDER_PARAM_NAMES:
+                    continue
                 param = SubElement(offer, "param")
                 param.set("name", oname)
                 param.text = oval
 
-        if p.get("is_new") and str(p.get("is_new")) not in ("0", "False", "false"):
-            SubElement(offer, "is_new").text = "true"
+            offers_el.append(offer)
+            added += 1
 
-        added += 1
+        except Exception as e:
+            errors += 1
+            _pid = p.get("productID") or p.get("id") or "?"
+            log(f"   ⚠️ KASTA: пропущено товар {_pid} через помилку: {e}")
+            continue
 
-    # Запис файлу
+    if no_photo:
+        log(f"   ℹ️ KASTA-фід '{feed['id']}': без фото пропущено — {no_photo}")
+    if errors:
+        log(f"   ⚠️ KASTA-фід '{feed['id']}': пропущено через помилки — {errors}")
+
     output.parent.mkdir(parents=True, exist_ok=True)
-    raw    = tostring(root, encoding="unicode")
+    raw = tostring(root, encoding="unicode")
     try:
         pretty = parseString(f'<?xml version="1.0" encoding="UTF-8"?>{raw}').toprettyxml(indent="  ")
-        lines  = pretty.splitlines()
+        lines = pretty.splitlines()
         if lines[0].startswith("<?xml"):
             lines[0] = '<?xml version="1.0" encoding="UTF-8"?>'
         final = "\n".join(lines)
@@ -568,17 +1169,7 @@ def build_xml(
 
     output.write_text(final, encoding="utf-8")
     size_mb = output.stat().st_size / 1024 / 1024
-
-    return {"offers": added, "skipped": skipped,
-            "categories": len(cats_el), "size_mb": round(size_mb, 1)}
-
-
-# ══════════════════════════════════════════════════════════════════
-#  ЛОГУВАННЯ
-# ══════════════════════════════════════════════════════════════════
-
-def log(msg: str):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+    return {"offers": added, "skipped": skipped, "categories": n_cats, "size_mb": round(size_mb, 2)}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -586,34 +1177,32 @@ def log(msg: str):
 # ══════════════════════════════════════════════════════════════════
 
 async def main():
-    cfg = load_config()
+    base  = load_base_config()
+    feeds = load_feeds(base)
 
-    login     = cfg.get("login", "")
-    password  = cfg.get("password", "")
-    lang      = cfg.get("lang", "ua")
-    cat_ids   = cfg.get("category_ids", [])
-    shop_name = cfg.get("shop_name", "Мій магазин")
-    shop_url  = cfg.get("shop_url",  "https://example.com.ua")
-    output    = Path(cfg.get("output_file", "output/catalog.xml"))
-    mode      = cfg.get("mode", "quick")
+    login    = base.get("login", "")
+    password = base.get("password", "")
+    mode     = base.get("mode", "quick")
+    shop_url = base.get("shop_url", "https://example.com.ua")
 
     if not login or not password:
-        log("❌ Не задані BRAIN_LOGIN / BRAIN_PASSWORD")
-        sys.exit(1)
+        log("❌ Не задані BRAIN_LOGIN / BRAIN_PASSWORD"); sys.exit(1)
 
-    if not cat_ids:
-        log("❌ Не вибрані категорії (category_ids порожній)")
-        sys.exit(1)
+    # усі категорії, потрібні хоч одному фіду
+    all_selected = set()
+    for f in feeds:
+        all_selected |= set(f["category_ids"])
+    if not all_selected:
+        log("❌ Жоден фід не має вибраних категорій"); sys.exit(1)
 
+    lang = base["lang"]
     log("=" * 55)
-    log(f"  Brain API → XML Exporter v3.0")
-    log(f"  Режим: {'🚀 FULL (повна вигрузка)' if mode == 'full' else '⚡ QUICK (тільки ціни)'}")
-    log(f"  Мова: {lang.upper()} | Категорій: {len(cat_ids)}")
+    log(f"  Brain API → XML Exporter v4.0")
+    log(f"  Режим: {'🚀 FULL' if mode == 'full' else '⚡ QUICK'} | Фідів: {len(feeds)}")
     log("=" * 55)
 
-    # Quick режим без кешу → автоматично full
     if mode == "quick" and not CACHE_FILE.exists():
-        log("⚠️  Кеш не знайдено — перемикаємось на FULL режим")
+        log("⚠️  Кеш не знайдено — перемикаємось на FULL")
         mode = "full"
 
     async with httpx.AsyncClient(
@@ -621,63 +1210,71 @@ async def main():
         limits=httpx.Limits(max_connections=15, max_keepalive_connections=10),
     ) as client:
         sid = await auth(client, login, password)
-
         try:
             all_cats = await fetch_categories(client, sid, lang)
             cat_map  = {c["categoryID"]: c for c in all_cats}
-
-            # Зберігаємо категорії для сайту
             save_categories_json(all_cats)
 
-            valid_ids = [cid for cid in cat_ids if cid in cat_map]
-            if not valid_ids:
-                log(f"❌ Категорії {cat_ids} не знайдені")
-                sys.exit(1)
+            by_parent: dict[int, list] = {}
+            for c in all_cats:
+                by_parent.setdefault(c.get("parentID", 1), []).append(c["categoryID"])
 
+            # повний набір категорій (вибрані + нащадки) для завантаження товарів
             needed = set()
-            for cid in valid_ids:
-                needed |= get_all_descendants(all_cats, cid)
+            for cid in all_selected:
+                if cid in cat_map:
+                    needed |= get_all_descendants(by_parent, cid)
+            log(f"📋 Категорій для завантаження (з нащадками): {len(needed)}")
 
-            log(f"📋 Категорій для вигрузки (з нащадками): {len(needed)}")
-
-            # ── FULL режим ────────────────────────────────────────
             if mode == "full":
                 products = await fetch_all_products_full(client, sid, list(needed), lang)
-
-            # ── QUICK режим ───────────────────────────────────────
             else:
-                log("⚡ Quick: завантажуємо кеш + оновлюємо ціни...")
+                log("⚡ Quick: кеш + оновлення цін...")
                 products = load_cache()
                 if not products:
-                    log("⚠️  Кеш порожній — перемикаємось на FULL")
+                    log("⚠️  Кеш порожній → FULL")
                     products = await fetch_all_products_full(client, sid, list(needed), lang)
                 else:
                     prices   = await fetch_prices_only(client, sid, list(needed), lang)
                     products = apply_prices_to_cache(products, prices)
 
-            # Генерація XML
-            stats = build_xml(
-                products   = products,
-                all_cats   = all_cats,
-                needed_ids = needed,
-                output     = output,
-                shop_name  = shop_name,
-                shop_url   = shop_url,
-                lang       = lang,
-            )
+            # ── будуємо XML для КОЖНОГО фіда ──
+            log(f"\n{'─' * 55}")
+            # shop_url міг бути перевизначений у feeds.json (load_feeds оновив base)
+            shop_url = base.get("shop_url", "https://example.com.ua")
+            results = []
+            current_ids = set()
+            for f in feeds:
+                out = OUTPUT_DIR / f"{f['id']}.xml"
+                if f.get("format") == "kasta":
+                    stats = build_kasta_feed_xml(products, all_cats, f, shop_url, out)
+                else:
+                    stats = build_feed_xml(products, all_cats, f, shop_url, out)
+                stats["id"] = f["id"]; stats["file"] = str(out)
+                results.append(stats)
+                current_ids.add(f["id"])
+                warn = "  ⚠️ >180МБ!" if stats["size_mb"] > 180 else ""
+                log(f"  ✅ {f['id']}.xml — товарів {stats['offers']}, "
+                    f"категорій {stats['categories']}, {stats['size_mb']}МБ{warn}")
+
+            # ── ПРИБИРАННЯ ОСИРОТІЛИХ ФІДІВ ──
+            # Якщо фід видалили з feeds.json, його старий XML лишається в репо
+            # і маркетплейс тягне застарілі дані. Видаляємо такі файли.
+            for old in OUTPUT_DIR.glob("*.xml"):
+                if old.stem not in current_ids:
+                    try:
+                        old.unlink()
+                        log(f"  🗑️  Видалено застарілий фід: {old.name} "
+                            f"(його більше немає у feeds.json)")
+                    except Exception as e:
+                        log(f"  ⚠️ Не вдалось видалити {old.name}: {e}")
 
             log(f"\n{'=' * 55}")
-            log(f"✅ Готово! Режим: {mode.upper()}")
-            log(f"   Товарів у XML:  {stats['offers']}")
-            log(f"   Пропущено:      {stats['skipped']}")
-            log(f"   Категорій:      {stats['categories']}")
-            log(f"   Розмір файлу:   {stats['size_mb']} МБ")
-            if stats["size_mb"] > 180:
-                log("⚠️  Файл > 180 МБ — перевищує ліміт Prom.ua!")
-            else:
-                log(f"✅ Prom.ua ліміт OK ({stats['size_mb']} / 180 МБ)")
-            log(f"   XML посилання:")
-            log(f"   https://raw.githubusercontent.com/lozko1991-blip/brain-exporter/main/output/catalog.xml")
+            log(f"✅ Готово! Режим: {mode.upper()} | Фідів: {len(results)}")
+            log(f"   Постійні посилання (заміни АКАУНТ/РЕПО):")
+            for r in results:
+                log(f"   • {r['id']}: "
+                    f"https://raw.githubusercontent.com/АКАУНТ/РЕПО/main/output/{r['id']}.xml")
             log(f"{'=' * 55}")
 
         finally:
