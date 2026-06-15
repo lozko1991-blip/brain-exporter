@@ -135,11 +135,13 @@
   .feed-cfg { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
   .fld { display: flex; flex-direction: column; gap: 5px; }
   .fld label { font-size: 10px; color: var(--t3); text-transform: uppercase; letter-spacing: .06em; }
-  .fld input {
+  .fld input, .fld select {
     background: var(--s3); border: 1px solid var(--b2); border-radius: 8px;
     padding: 8px 12px; color: var(--t1); font-family: inherit; font-size: 13px; outline: none;
   }
-  .fld input:focus { border-color: var(--blue); }
+  .fld input:focus, .fld select:focus { border-color: var(--blue); }
+  .feed-tab .fmt { font-size: 9px; color: var(--violet); border: 1px solid var(--violet);
+    border-radius: 4px; padding: 0 4px; letter-spacing: .04em; }
   .markup-note { font-size: 11px; color: var(--t3); margin-top: 8px; line-height: 1.6; }
   .markup-note b { color: var(--green); }
 </style>
@@ -274,7 +276,7 @@ let GH = { account: "lozko1991-blip", repo: "brain-exporter" };
 
 function newFeed(name) {
   return { id: slug(name), name, selected: new Set(),
-           markup_percent: 0, markup_fixed: 0, lang: 'ua' };
+           markup_percent: 0, markup_fixed: 0, lang: 'ua', format: 'yml' };
 }
 function slug(s) {
   return (s||'feed').toLowerCase().trim()
@@ -500,6 +502,7 @@ function renderFeedTabs() {
     t.className = 'feed-tab' + (i === activeFeed ? ' active' : '');
     t.onclick = () => selectFeed(i);
     t.innerHTML = `<span class="dot"></span>${f.name}
+      ${f.format==='kasta'?'<span class="fmt">KASTA</span>':''}
       <span class="cnt">${f.selected.size} кат.</span>
       <span class="x" title="Видалити" onclick="removeFeed(${i}, event)">✕</span>`;
     wrap.appendChild(t);
@@ -521,6 +524,13 @@ function renderFeedConfig() {
     <div class="fld">
       <label>ID файлу (output/____.xml)</label>
       <input id="f-id" value="${f.id}" oninput="af().id=slug(this.value);updateConfig();renderFeedTabs()">
+    </div>
+    <div class="fld">
+      <label>Формат експорту</label>
+      <select id="f-format" onchange="af().format=this.value;renderFeedConfig();updateConfig();renderFeedTabs()">
+        <option value="yml"${f.format!=='kasta'?' selected':''}>Rozetka / Prom (YML)</option>
+        <option value="kasta"${f.format==='kasta'?' selected':''}>KASTA (поділ за статтю, 2 мови)</option>
+      </select>
     </div>
     <div class="fld">
       <label>Націнка, %</label>
@@ -545,10 +555,11 @@ function onFeedName(v) {
 // ── Генерація feeds.json ──────────────────────────────────────────
 function updateConfig() {
   const out = {
-    shop_url: "https://example.com.ua",
+    shop_url: "https://avi.com.ua",
     feeds: feeds.map(f => ({
       id:             f.id,
       name:           f.name,
+      format:         f.format || 'yml',
       lang:           f.lang,
       markup_percent: f.markup_percent,
       markup_fixed:   f.markup_fixed,
@@ -563,9 +574,14 @@ function updateConfig() {
 
   // приклад розрахунку націнки
   const ex = Math.round(1000 * (1 + f.markup_percent/100) + f.markup_fixed);
+  const kastaHint = f.format === 'kasta'
+    ? `<br>🛍 <b style="color:var(--violet)">KASTA-формат:</b> дитячий одяг авто-розбивається на ` +
+      `«для дівчаток / для хлопців» за параметром «Стать дитини» (унісекс лишається в рідній категорії); ` +
+      `name_ua + name_ru, опис без HTML, old_price.`
+    : '';
   document.getElementById('markup-note').innerHTML =
     `Приклад: товар з закупкою <b>1000 грн</b> → ціна продажу у фіді "${f.name}" = <b>${ex} грн</b> ` +
-    `(1000 +${f.markup_percent}% +${f.markup_fixed}грн)`;
+    `(1000 +${f.markup_percent}% +${f.markup_fixed}грн)` + kastaHint;
 
   // посилання
   document.getElementById('xml-urls').innerHTML = feeds.map(f =>
