@@ -136,6 +136,8 @@ def load_feeds(base: dict) -> list:
                 "markup_percent": float(f.get("markup_percent", 0) or 0),
                 "markup_fixed":   float(f.get("markup_fixed", 0) or 0),
                 "lang":           f.get("lang") or base["lang"],
+                # формат фіда: "kasta" → KASTA-білдер, інакше Rozetka/Prom YML
+                "format":         str(f.get("format", "yml")).strip().lower(),
             })
         log(f"📑 feeds.json: {len(out)} фід(ів)")
         return out
@@ -152,6 +154,7 @@ def load_feeds(base: dict) -> list:
         "markup_percent": float(cfg.get("markup_percent", 0) or 0),
         "markup_fixed":   float(cfg.get("markup_fixed", 0) or 0),
         "lang":           base["lang"],
+        "format":         "yml",
     }]
 
 
@@ -264,26 +267,22 @@ async def fetch_products_page(
 
 
 async def fetch_product_full(client: httpx.AsyncClient, sid: str, pid: int, lang: str) -> dict:
-    """Повна картка товару — ДАЄ повний `description` (список /products його не містить)."""
+    """
+    Повна картка товару. Дає те, чого немає у списку /products:
+    повний `description`, `koduktved`, а також `options` (характеристики).
+    Запитуємо `lang=ua_ru` — за ОДИН запит отримуємо обидві мови:
+      name / description / country / options (укр)
+      + name_ru / description_ru / country_ru / options_ru (рос).
+    Це дозволяє заповнити для KASTA і name_ua, і name_ru.
+    """
     try:
-        r = await client.get(f"{API_BASE}/product/{pid}/{sid}?lang={lang}", timeout=20)
+        r = await client.get(f"{API_BASE}/product/{pid}/{sid}?lang=ua_ru", timeout=20)
         d = r.json()
         if d.get("status") == 1 and isinstance(d.get("result"), dict):
             return d["result"]
     except Exception:
         pass
     return {}
-
-
-async def fetch_options(client: httpx.AsyncClient, sid: str, pid: int, lang: str) -> list:
-    try:
-        r = await client.get(f"{API_BASE}/product_options/{pid}/{sid}?lang={lang}", timeout=15)
-        d = r.json()
-        if d.get("status") == 1:
-            return d.get("result", [])
-    except Exception:
-        pass
-    return []
 
 
 async def fetch_pictures(client: httpx.AsyncClient, sid: str, pid: int) -> list:
@@ -344,10 +343,13 @@ async def fetch_all_products_full(
     log(f"\n✅ Фаза 1: {len(product_list)} товарів у наявності "
         f"(пропущено відсутніх: {skipped_oos})")
 
-    # Фаза 2: повна картка (опис) + характеристики + фото, паралельно по 3
-    log("📋 Фаза 2: опис + характеристики + фото (паралельно по 3)...")
+    # Фаза 2: повна картка (опис + характеристики, обидві мови) + фото.
+    # Раніше робили 3 запити/товар (product + product_options + pictures).
+    # Тепер 2: повна картка `product` уже містить `options`, тож окремий
+    # product_options не потрібен — це ~1.5× швидше. Більший batch_sz.
+    log("📋 Фаза 2: опис + характеристики + фото (паралельно по 4)...")
     total    = len(product_list)
-    batch_sz = 3  # 3 товари × 3 запити = 9 req / 2 сек ≈ ліміт Brain
+    batch_sz = 4  # 4 товари × 2 запити = 8 req / 2 сек ≈ ліміт Brain
 
     for start in range(0, total, batch_sz):
         batch = product_list[start:start + batch_sz]
@@ -356,20 +358,20 @@ async def fetch_all_products_full(
         all_results = await asyncio.gather(*[
             asyncio.gather(
                 fetch_product_full(client, sid, pid, lang),
-                fetch_options(client, sid, pid, lang),
                 fetch_pictures(client, sid, pid),
             )
             for pid in pids
         ])
 
-        for p, (full, opts, pics) in zip(batch, all_results):
-            # Повна картка містить description, country, weight, stocks тощо
+        for p, (full, pics) in zip(batch, all_results):
+            # Повна картка містить description(+_ru), country, options(+_ru) тощо
             if full:
                 for k, v in full.items():
                     # не затираємо ціни/наявність зі списку, якщо у повній порожньо
                     if v not in (None, "", []):
                         p[k] = v
-            p["options"]  = opts
+            # options_ru не використовуємо (params у KASTA — укр) → не роздуваємо кеш
+            p.pop("options_ru", None)
             p["pictures"] = pics
 
         done = min(start + batch_sz, total)
@@ -404,9 +406,12 @@ async def fetch_prices_only(
                         "price_uah":           p.get("price_uah", 0),
                         "retail_price_uah":    p.get("retail_price_uah", 0),
                         "recommendable_price": p.get("recommendable_price", 0),
-                        "stocks":              p.get("stocks", []),
+                        # ВАЖЛИВО: не підставляти [] / {} за замовчуванням —
+                        # інакше товари акаунта без полів залишку «обнуляться».
+                        # None зберігає факт «поля немає» (stock_qty трактує як в наявності).
+                        "stocks":              p.get("stocks"),
                         "stocks_expected":     p.get("stocks_expected", {}),
-                        "available":           p.get("available", {}),
+                        "available":           p.get("available"),
                         "is_archive":          p.get("is_archive", 0),
                     }
             print(f"   [{i}/{len(cat_ids)}] Кат.{cat_id}: {offset + len(products)}", end="\r")
@@ -552,10 +557,14 @@ def stock_qty(p: dict) -> int:
         if total > 0:
             return total
         # available є, але всі нулі → товару фактично немає
-        # (падаємо нижче на перевірку stocks)
+        return 0
 
-    # 2) Є склади, але кількість невідома
-    stocks = p.get("stocks", [])
+    # 2) Склади (масив ID складів). ВАЖЛИВО відрізняти:
+    #    • stocks ВІДСУТНІЙ у відповіді (None) — акаунт не віддає залишки →
+    #      кількість невідома, але товар є в каталозі з ціною → DEFAULT_STOCK.
+    #    • stocks = [] (порожній список ПРИСУТНІЙ) — товару немає на жодному
+    #      складі → 0 (так само ставить apply_prices_to_cache для зниклих).
+    stocks = p.get("stocks")
     if isinstance(stocks, list):
         return DEFAULT_STOCK if len(stocks) > 0 else 0
     if isinstance(stocks, (int, float)):
@@ -563,7 +572,8 @@ def stock_qty(p: dict) -> int:
     if isinstance(stocks, str) and stocks.strip().isdigit():
         return int(stocks) if int(stocks) > 0 else 0
 
-    return 0
+    # 3) Ні available, ні stocks акаунт не надав → вважаємо в наявності.
+    return DEFAULT_STOCK
 
 
 def vendor_name(p: dict) -> str:
@@ -597,6 +607,86 @@ def build_group_id(product: dict) -> str:
         return ""
     group = re.sub(r'[-/_\s]+(XS|S|M|L|XL|XXL|XXXL|XXXXL)$', '', articul, flags=re.I)
     return group if group and group != articul else ""
+
+
+# ══════════════════════════════════════════════════════════════════
+#  СТАТЬ ДИТИНИ (для поділу дитячого одягу) + ЧИСТКА ДЛЯ KASTA
+# ══════════════════════════════════════════════════════════════════
+
+# Назви характеристики статі в Brain — укр і рос (нормалізовані до lower).
+GENDER_PARAM_NAMES = {"стать дитини", "стать", "пол ребенка", "пол"}
+
+# Суфікси назв синтетичних категорій за статтю — залежно від мови фіда.
+GENDER_SUFFIX = {
+    "ua": {"girl": "для дівчаток", "boy": "для хлопців"},
+    "ru": {"girl": "для девочек",  "boy": "для мальчиков"},
+}
+# Суфікс до ID категорії: br8141 → br8141g (дівчатка) / br8141b (хлопці).
+GENDER_CID_SUFFIX = {"girl": "g", "boy": "b"}
+
+
+def detect_gender(p: dict):
+    """
+    Стать товару за характеристикою «Стать дитини»/«Пол ребенка».
+    Повертає 'girl' | 'boy' | None (унісекс).
+
+    Унісекс (None) — коли:
+      • параметра статі немає взагалі, АБО
+      • товар має ОБИДВІ статі (Brain часто дає «Стать дитини» двічі:
+        і «для дівчинки», і «для хлопчика») — такий товар не можна
+        однозначно віднести до однієї статі, лишаємо в рідній категорії.
+
+    Значення матчимо підрядком, обома мовами:
+    «для дівчинки», «дівчача», «для девочки», «девичий» → girl;
+    «для хлопчика», «для мальчика», «мальчиковый» → boy.
+    """
+    girl = boy = False
+    for opt in p.get("options", []) or []:
+        if not isinstance(opt, dict):
+            continue
+        oname = str(opt.get("OptionName") or opt.get("name_ua")
+                    or opt.get("name") or "").strip().lower()
+        if oname not in GENDER_PARAM_NAMES:
+            continue
+        oval = str(opt.get("ValueName") or opt.get("value_ua")
+                   or opt.get("value") or "").strip().lower()
+        if "дівчин" in oval or "дівчач" in oval or "девоч" in oval or "девич" in oval:
+            girl = True
+        elif "хлопч" in oval or "мальчик" in oval:
+            boy = True
+    if girl and not boy:
+        return "girl"
+    if boy and not girl:
+        return "boy"
+    return None  # обидві статі або жодної → унісекс
+
+
+def clean_html(text, limit: int = 5000) -> str:
+    """
+    KASTA не приймає HTML в описі і ріже до 5000 символів.
+    Знімаємо теги, розкодовуємо сутності, схлопуємо пробіли, обрізаємо.
+    """
+    if not text:
+        return ""
+    t = re.sub(r"<[^>]+>", " ", str(text))
+    t = (t.replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">")
+          .replace("&quot;", '"').replace("&apos;", "'").replace("&amp;", "&"))
+    t = re.sub(r"\s+", " ", t).strip()
+    return safe(t)[:limit]
+
+
+# Стоп-слова KASTA у назві/бренді (конкуренти/маркетплейси) — прибираємо.
+KASTA_STOPWORDS = ("rozetka", "розетка", "prom", "пром", "express",
+                   "expres", "meest", "kasta", "каста")
+
+
+def strip_stopwords(text) -> str:
+    if not text:
+        return ""
+    out = str(text)
+    for w in KASTA_STOPWORDS:
+        out = re.sub(re.escape(w), "", out, flags=re.I)
+    return re.sub(r"\s+", " ", out).strip()
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -686,7 +776,10 @@ def build_feed_xml(
             if gid:
                 offer.set("group_id", f"{ID_PREFIX}{gid}")
 
-            SubElement(offer, "name").text = safe(p.get("name") or "")
+            # повна картка тепер тягне обидві мови (ua_ru): для ru-фіда беремо
+            # name_ru, інакше укр name. Так ru-фіди не ламаються.
+            nm = (p.get("name_ru") if lang == "ru" else None) or p.get("name") or ""
+            SubElement(offer, "name").text = safe(nm)
 
             # ── ЦІНА З НАЦІНКОЮ ФІДА: bp × (1 + %/100) + грн ──
             sell = round(bp * (1 + mp / 100) + mf, 0)
@@ -745,8 +838,10 @@ def build_feed_xml(
             offer.set("available", "true")
             SubElement(offer, "stock_quantity").text = str(qty)
 
-            # ── ОПИС: повний `description`, fallback на короткий ──
-            desc = safe(p.get("description") or p.get("brief_description") or "")
+            # ── ОПИС: повний `description`, fallback на короткий (мовно-залежно) ──
+            desc_src = ((p.get("description_ru") or p.get("brief_description_ru"))
+                        if lang == "ru" else None)
+            desc = safe(desc_src or p.get("description") or p.get("brief_description") or "")
             if desc:
                 d = SubElement(offer, "description")
                 d.text = f"__CDATA_OPEN__{desc}__CDATA_CLOSE__"
@@ -803,6 +898,228 @@ def build_feed_xml(
 
     final = final.replace("&lt;![CDATA[", "__CDATA_OPEN__").replace("]]&gt;", "__CDATA_CLOSE__")
     final = re.sub(r'__CDATA_OPEN__(.*?)__CDATA_CLOSE__', _unescape_cdata, final, flags=re.S)
+
+    output.write_text(final, encoding="utf-8")
+    size_mb = output.stat().st_size / 1024 / 1024
+    return {"offers": added, "skipped": skipped, "categories": n_cats, "size_mb": round(size_mb, 2)}
+
+
+# ══════════════════════════════════════════════════════════════════
+#  XML ГЕНЕРАТОР — KASTA (name_ua, опис без HTML, old_price, поділ за статтю)
+# ══════════════════════════════════════════════════════════════════
+
+def build_kasta_feed_xml(
+    products: list, all_cats: list, feed: dict,
+    shop_url: str, output: Path,
+) -> dict:
+    cat_map = {c["categoryID"]: c for c in all_cats}
+    by_parent: dict[int, list] = {}
+    for c in all_cats:
+        by_parent.setdefault(c.get("parentID", 1), []).append(c["categoryID"])
+
+    needed = set()
+    for cid in feed["category_ids"]:
+        if cid in cat_map:
+            needed |= get_all_descendants(by_parent, cid)
+
+    lang = feed["lang"]
+    mp   = feed["markup_percent"]
+    mf   = feed["markup_fixed"]
+    suffixes = GENDER_SUFFIX.get(lang, GENDER_SUFFIX["ua"])
+    log(f"📝 KASTA-фід '{feed['id']}': категорій={len(needed)}, націнка +{mp}% +{mf}грн")
+
+    def in_scope(p) -> bool:
+        cid = p.get("categoryID")
+        try:
+            return bool(cid) and int(cid) in needed
+        except Exception:
+            return False
+
+    # ── Пас 1: які пари (категорія, стать) реально зустрічаються —
+    #    щоб створити рівно ті дочірні категорії за статтю, що потрібні ──
+    gender_cats_used: set[tuple[int, str]] = set()
+    for p in products:
+        if not in_scope(p):
+            continue
+        g = detect_gender(p)
+        if g:
+            gender_cats_used.add((int(p["categoryID"]), g))
+    log(f"   👫 Категорій зі статтю: {len(gender_cats_used)} "
+        f"(решта товарів лишаються в рідній категорії як унісекс)")
+
+    now  = datetime.now().strftime("%Y-%m-%d %H:%M")
+    root = Element("yml_catalog"); root.set("date", now)
+    shop = SubElement(root, "shop")
+    SubElement(shop, "name").text    = safe(feed["name"])
+    SubElement(shop, "company").text = safe(feed["name"])
+    SubElement(shop, "url").text     = safe(shop_url)
+    cur = SubElement(SubElement(shop, "currencies"), "currency")
+    cur.set("id", "UAH"); cur.set("rate", "1")
+
+    # повний набір категорій (вибрані + усі батьки)
+    full_needed = set(needed)
+    for cid in list(needed):
+        pid = cat_map.get(cid, {}).get("parentID", 1)
+        while pid and pid != 1 and pid in cat_map:
+            full_needed.add(pid)
+            pid = cat_map.get(pid, {}).get("parentID", 1)
+
+    cats_el = SubElement(shop, "categories")
+    n_cats = 0
+    for cat in all_cats:
+        if cat["categoryID"] not in full_needed:
+            continue
+        el = SubElement(cats_el, "category")
+        el.set("id", cid_ext(cat["categoryID"]))
+        if cat.get("parentID", 1) != 1:
+            el.set("parentId", cid_ext(cat["parentID"]))
+        el.text = safe(cat["name"])
+        n_cats += 1
+
+    # ── синтетичні дочірні категорії за статтю ──
+    # br8141 «Комбінезони» → br8141g «Комбінезони для дівчаток», br8141b «… для хлопців»
+    for (orig_cid, g) in sorted(gender_cats_used):
+        el = SubElement(cats_el, "category")
+        el.set("id", cid_ext(orig_cid) + GENDER_CID_SUFFIX[g])
+        el.set("parentId", cid_ext(orig_cid))
+        base_name = safe(cat_map.get(orig_cid, {}).get("name", ""))
+        el.text = f"{base_name} {suffixes[g]}".strip()
+        n_cats += 1
+
+    offers_el = SubElement(shop, "offers")
+    added = skipped = errors = no_photo = 0
+
+    for p in products:
+        try:
+            pid = (p.get("productID") or p.get("product_id") or p.get("ID") or p.get("id"))
+            if not pid:
+                skipped += 1; continue
+            pid = int(pid)
+            if not in_scope(p):
+                skipped += 1; continue
+
+            bp = base_price(p)
+            if bp <= 0:
+                skipped += 1; continue
+
+            is_archive = is_true(p.get("is_archive", False))
+            qty = stock_qty(p)
+            if is_archive or qty == 0:
+                skipped += 1; continue
+
+            nm_ua = strip_stopwords(safe(p.get("name") or ""))
+            nm_ru = strip_stopwords(safe(p.get("name_ru") or ""))
+            if not (nm_ua or nm_ru):
+                skipped += 1; continue  # KASTA вимагає назву
+
+            offer = Element("offer")
+            offer.set("id", pid_ext(pid))
+            offer.set("available", "true")
+
+            gid = build_group_id(p)
+            if gid:
+                offer.set("group_id", f"{ID_PREFIX}{gid}")
+
+            SubElement(offer, "currencyId").text = "UAH"
+
+            # ── КАТЕГОРІЯ: за статтю якщо параметр є, інакше рідна (унісекс) ──
+            orig_cid = int(p["categoryID"])
+            g = detect_gender(p)
+            cat_id_out = cid_ext(orig_cid) + (GENDER_CID_SUFFIX[g] if g else "")
+            SubElement(offer, "categoryId").text = cat_id_out
+
+            # ── ЦІНИ (KASTA: old_price СТРОГО > price) ──
+            sell = round(bp * (1 + mp / 100) + mf, 0)
+            SubElement(offer, "price").text = str(int(sell))
+            try:
+                rec = float(str(p.get("retail_price_uah")
+                                or p.get("recommendable_price") or 0).replace(",", "."))
+            except Exception:
+                rec = 0
+            if rec > sell:
+                SubElement(offer, "old_price").text = str(int(rec))
+
+            # ── ФОТО (мінімум 1, максимум 20) ──
+            n_pics = 0
+            pics = p.get("pictures", [])
+            if isinstance(pics, list) and pics:
+                for pic in sorted(pics, key=lambda x: x.get("priority", 99) if isinstance(x, dict) else 99):
+                    if n_pics >= 20:
+                        break
+                    if not isinstance(pic, dict):
+                        continue
+                    url = pic.get("full_image") or pic.get("large_image") or pic.get("medium_image")
+                    if url and "no-photo" not in url:
+                        SubElement(offer, "picture").text = url; n_pics += 1
+            if n_pics == 0:
+                for key in ["full_image", "large_image", "medium_image", "small_image"]:
+                    if p.get(key) and "no-photo" not in str(p.get(key)):
+                        SubElement(offer, "picture").text = p[key]; n_pics += 1; break
+            if n_pics == 0:
+                no_photo += 1; skipped += 1; continue  # без фото KASTA відхилить
+
+            vn = strip_stopwords(vendor_name(p))
+            if vn:
+                SubElement(offer, "vendor").text = safe(vn)
+
+            articul = p.get("articul") or p.get("product_code", "")
+            if articul:
+                SubElement(offer, "article").text = safe(str(articul))
+
+            # назва — обидві мови (KASTA воліє name_ua; name_ru — бонус)
+            if nm_ua:
+                SubElement(offer, "name_ua").text = nm_ua
+            if nm_ru:
+                SubElement(offer, "name_ru").text = nm_ru
+
+            # опис — обидві мови, без HTML, ≤5000 символів
+            desc_ua = clean_html(p.get("description") or p.get("brief_description") or "")
+            if desc_ua:
+                SubElement(offer, "description_ua").text = desc_ua
+            desc_ru = clean_html(p.get("description_ru") or p.get("brief_description_ru") or "")
+            if desc_ru:
+                SubElement(offer, "description_ru").text = desc_ru
+
+            SubElement(offer, "stock_quantity").text = str(qty)
+
+            # ── ХАРАКТЕРИСТИКИ (стать НЕ дублюємо — вона вже у категорії) ──
+            for opt in p.get("options", []) or []:
+                if not isinstance(opt, dict):
+                    continue
+                oname = safe(opt.get("OptionName") or opt.get("name_ua") or opt.get("name") or "")
+                oval  = safe(opt.get("ValueName")  or opt.get("value_ua") or opt.get("value") or "")
+                if not (oname and oval):
+                    continue
+                if oname.strip().lower() in GENDER_PARAM_NAMES:
+                    continue
+                param = SubElement(offer, "param")
+                param.set("name", oname)
+                param.text = oval
+
+            offers_el.append(offer)
+            added += 1
+
+        except Exception as e:
+            errors += 1
+            _pid = p.get("productID") or p.get("id") or "?"
+            log(f"   ⚠️ KASTA: пропущено товар {_pid} через помилку: {e}")
+            continue
+
+    if no_photo:
+        log(f"   ℹ️ KASTA-фід '{feed['id']}': без фото пропущено — {no_photo}")
+    if errors:
+        log(f"   ⚠️ KASTA-фід '{feed['id']}': пропущено через помилки — {errors}")
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    raw = tostring(root, encoding="unicode")
+    try:
+        pretty = parseString(f'<?xml version="1.0" encoding="UTF-8"?>{raw}').toprettyxml(indent="  ")
+        lines = pretty.splitlines()
+        if lines[0].startswith("<?xml"):
+            lines[0] = '<?xml version="1.0" encoding="UTF-8"?>'
+        final = "\n".join(lines)
+    except Exception:
+        final = f'<?xml version="1.0" encoding="UTF-8"?>\n{raw}'
 
     output.write_text(final, encoding="utf-8")
     size_mb = output.stat().st_size / 1024 / 1024
@@ -883,7 +1200,10 @@ async def main():
             current_ids = set()
             for f in feeds:
                 out = OUTPUT_DIR / f"{f['id']}.xml"
-                stats = build_feed_xml(products, all_cats, f, shop_url, out)
+                if f.get("format") == "kasta":
+                    stats = build_kasta_feed_xml(products, all_cats, f, shop_url, out)
+                else:
+                    stats = build_feed_xml(products, all_cats, f, shop_url, out)
                 stats["id"] = f["id"]; stats["file"] = str(out)
                 results.append(stats)
                 current_ids.add(f["id"])
