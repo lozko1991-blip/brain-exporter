@@ -149,6 +149,7 @@
     display: flex; align-items: center; justify-content: center; transition: all .15s; }
   .splitbtn:hover { border-color: var(--violet); color: var(--violet); }
   .splitbtn.on { background: var(--violet); border-color: var(--violet); color: #fff; }
+  .splitbtn.mid { border-color: var(--violet); color: var(--violet); background: rgba(124,92,252,.15); }
   .markup-note { font-size: 11px; color: var(--t3); margin-top: 8px; line-height: 1.6; }
   .markup-note b { color: var(--green); }
 </style>
@@ -319,8 +320,37 @@ async function loadCategories() {
       `24 категорії (демо — запусти Actions щоб побачити реальні)`;
   }
   renderTree();
+  // підвантажуємо наявний feeds.json, щоб показати поточний вибір категорій,
+  // розбивку за статтю, націнки і префікси (round-trip, нічого не губимо)
+  await loadExistingFeeds();
   if (feeds.length === 0) feeds.push(newFeed('Rozetka'));
   selectFeed(0);
+}
+
+// Читає feeds.json з репозиторію і відновлює стан фідів у адмінці.
+async function loadExistingFeeds() {
+  try {
+    const r = await fetch('feeds.json?t=' + Date.now());
+    if (!r.ok) return;
+    const data = await r.json();
+    const list = (data.feeds || []).filter(f => f);
+    if (!list.length) return;
+    feeds = list.map(f => ({
+      id:              slug(f.id || f.name || 'feed'),
+      name:            f.name || f.id || 'feed',
+      selected:        new Set((f.category_ids || []).map(Number)),
+      splitCats:       new Set((f.split_category_ids || []).map(Number)),
+      markup_percent:  parseFloat(f.markup_percent) || 0,
+      markup_fixed:    parseFloat(f.markup_fixed) || 0,
+      lang:            f.lang || 'ua',
+      format:          (f.format || 'yml').toLowerCase(),
+      prefix_offer:    f.prefix_offer || 'br',
+      prefix_category: f.prefix_category || 'br',
+    }));
+    activeFeed = 0;
+  } catch (e) {
+    console.log('feeds.json не знайдено/невалідний — старт із чистого фіда:', e.message);
+  }
 }
 
 // Demo категорії для перегляду без бекенду
@@ -394,7 +424,9 @@ function renderTree(nodes = treeData, container = null, depth = 0) {
 
     const f0 = af();
     const isKasta = !!f0 && f0.format === 'kasta';
-    const inSplit = !!f0 && f0.splitCats.has(node.categoryID);
+    const splitCnt = f0 ? allIds.filter(id => f0.splitCats.has(id)).length : 0;
+    const splitOn  = splitCnt === allIds.length && allIds.length > 0;
+    const splitMid = splitCnt > 0 && !splitOn;
 
     const row = document.createElement('div');
     row.className = 'crow' + (isOn ? ' sel' : '');
@@ -403,7 +435,7 @@ function renderTree(nodes = treeData, container = null, depth = 0) {
       <span class="chk${isOn?' on':(isMid?' mid':'')}" onclick="check(${node.categoryID})" title="Вибрати">
         <svg viewBox="0 0 10 8" width="9"><path d="M1 4l3 3 5-6" stroke="white" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </span>
-      ${isKasta?`<button class="splitbtn${inSplit?' on':''}" onclick="toggleSplit(${node.categoryID},event)" title="Розбивати цю категорію на підкатегорії за статтю (♀/♂)">⚥</button>`:''}
+      ${isKasta?`<button class="splitbtn${splitOn?' on':(splitMid?' mid':'')}" onclick="toggleSplit(${node.categoryID},event)" title="Розбивати на підкатегорії за статтю (♀/♂). Можна позначати і батьківську, і дочірню">⚥</button>`:''}
       <span class="cname" onclick="${hasKids?`toggle(${node.categoryID})`:''}">
         <span class="cico">${hasKids?(isOpen?'📂':'📁'):'📄'}</span>
         <span class="ctxt">${node.name}</span>
@@ -441,8 +473,15 @@ function check(id) {
 
 function toggleSplit(id, ev) {
   ev.stopPropagation();
-  const s = af().splitCats;
-  s.has(id) ? s.delete(id) : s.add(id);
+  // каскад на всіх нащадків (як вибір категорій): можна позначити і
+  // батьківську (застосується до всієї гілки), і окрему дочірню.
+  const node = findNode(id, treeData);
+  if (!node) return;
+  const ids = getAllIds(node);
+  const s   = af().splitCats;
+  const cnt = ids.filter(i => s.has(i)).length;
+  const remove = cnt > 0;
+  ids.forEach(i => remove ? s.delete(i) : s.add(i));
   renderTree(); updateConfig();
 }
 

@@ -26,6 +26,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from xml.dom.minidom import parseString
@@ -40,6 +41,29 @@ CACHE_FILE = Path("products_cache.json")
 CATS_FILE  = Path("categories.json")
 FEEDS_FILE = Path("feeds.json")
 OUTPUT_DIR.mkdir(exist_ok=True)
+
+# ══════════════════════════════════════════════════════════════════
+#  ПАРАЛЕЛЬНІ SHARD-ДЖОБИ + СТІЙКІСТЬ ДО ЗБОЇВ BRAIN
+# ──────────────────────────────────────────────────────────────────
+# Документація Brain НЕ описує rate-ліміт / термін сесії / кількість
+# одночасних сесій. Тому проєктуємо захищено:
+#   • EXPORT_STAGE=setup  — один auth + категорії (передає SID далі)
+#   • EXPORT_STAGE=shard  — качає СВОЮ частину категорій (свій кеш-файл)
+#   • EXPORT_STAGE=merge  — збирає частини в один кеш і будує XML
+#   • EXPORT_STAGE=solo   — усе в одному процесі (локально / малий каталог)
+# SID береться з BRAIN_SID (спільний на всі shard-и) — Brain бачить ОДНУ
+# сесію + паралельні читання, що для нього найбезпечніше. Якщо SID відхилено
+# — shard сам перелогіниться (BRAIN_LOGIN/BRAIN_PASSWORD мають бути в env).
+EXPORT_STAGE = (os.environ.get("EXPORT_STAGE") or "solo").strip().lower()
+SHARD_INDEX  = int(os.environ.get("SHARD_INDEX", "0") or 0)
+SHARD_TOTAL  = max(1, int(os.environ.get("SHARD_TOTAL", "1") or 1))
+# Бюджет часу (хв) на качання у shard/solo. Коли вичерпано — процес
+# КОРЕКТНО зупиняє завантаження, зберігає що встиг і виходить успішно
+# (0 = без ліміту). Це гарантує, що таймаут джоба не втратить прогрес.
+TIME_BUDGET_MIN = float(os.environ.get("TIME_BUDGET_MIN", "0") or 0)
+
+def shard_cache_file(idx: int) -> Path:
+    return Path(f"products_cache.shard{idx}.json")
 
 # Префікс для ID товарів і категорій у XML — щоб уникнути колізій
 # з товарами інших постачальників на маркетплейсі. "br" = Brain.
@@ -174,16 +198,51 @@ def load_feeds(base: dict) -> list:
 async def auth(client: httpx.AsyncClient, login: str, password: str) -> str:
     md5_pass = hashlib.md5(password.encode("utf-8")).hexdigest()
     log(f"🔐 Авторизація: {login}")
-    resp = await client.post(
-        f"{API_BASE}/auth",
-        data={"login": login, "password": md5_pass},
-        timeout=20,
-    )
-    data = resp.json()
-    if data.get("status") != 1:
-        raise Exception(f"❌ Помилка авторизації: {data}")
-    log(f"✅ Авторизовано, SID: {data['result'][:8]}...")
-    return data["result"]
+    # кілька спроб — Brain інколи відповідає 5xx/таймаутом на сплеск запитів
+    last = None
+    for attempt in range(4):
+        try:
+            resp = await client.post(
+                f"{API_BASE}/auth",
+                data={"login": login, "password": md5_pass},
+                timeout=20,
+            )
+            data = resp.json()
+            if data.get("status") == 1 and data.get("result"):
+                log(f"✅ Авторизовано, SID: {data['result'][:8]}...")
+                return data["result"]
+            last = data
+        except Exception as e:
+            last = e
+        await asyncio.sleep(2 ** attempt)   # 1,2,4,8 c
+    raise Exception(f"❌ Помилка авторизації після 4 спроб: {last}")
+
+
+# Поточний робочий SID (може оновитись автоперелогіном). Глобал, щоб усі
+# fetch-функції бачили свіжий токен без передавання крізь усі виклики.
+_SID_STATE = {"sid": "", "login": "", "password": ""}
+
+def _looks_like_dead_session(data: dict) -> bool:
+    """Чи відповідь Brain означає «сесія недійсна» (треба перелогінитись)."""
+    if not isinstance(data, dict):
+        return False
+    if data.get("status") == 1:
+        return False
+    txt = json.dumps(data, ensure_ascii=False).lower()
+    return any(k in txt for k in ("session", "сесі", "auth", "sid", "unauthor", "token"))
+
+async def ensure_sid(client: httpx.AsyncClient) -> str:
+    """Повертає робочий SID; за потреби перелогінюється (для shard-ів зі спільним SID)."""
+    if _SID_STATE["sid"]:
+        return _SID_STATE["sid"]
+    _SID_STATE["sid"] = await auth(client, _SID_STATE["login"], _SID_STATE["password"])
+    return _SID_STATE["sid"]
+
+async def reauth(client: httpx.AsyncClient) -> str:
+    """Примусовий перелогін (коли поточний SID відхилено Brain)."""
+    _SID_STATE["sid"] = ""
+    log("♻️  SID відхилено Brain — перелогінююсь...")
+    return await ensure_sid(client)
 
 
 async def logout(client: httpx.AsyncClient, sid: str):
@@ -204,6 +263,28 @@ async def fetch_categories(client: httpx.AsyncClient, sid: str, lang: str) -> li
     cats = resp.json().get("result", [])
     log(f"   Знайдено: {len(cats)} категорій")
     return cats
+
+
+def load_categories_flat() -> list:
+    """
+    Плоский список категорій {categoryID, parentID, name} з categories.json.
+    Потрібен merge-стадії, яка будує XML, але сама не качає категорії з API.
+    """
+    if not CATS_FILE.exists():
+        return []
+    data = json.loads(CATS_FILE.read_text(encoding="utf-8"))
+    flat = []
+    stack = list(data.get("categories", []))
+    while stack:
+        node = stack.pop()
+        flat.append({
+            "categoryID": node["categoryID"],
+            "parentID":   node.get("parentID", 1),
+            "name":       node.get("name", ""),
+        })
+        stack.extend(node.get("children", []))
+    log(f"📂 categories.json прочитано: {len(flat)} категорій (для merge)")
+    return flat
 
 
 def get_all_descendants(cats_by_parent: dict, parent_id: int) -> set:
@@ -256,11 +337,12 @@ async def fetch_products_page(
     client: httpx.AsyncClient, sid: str, cat_id: int,
     lang: str, offset: int, limit: int = 100
 ) -> list:
-    url = (f"{API_BASE}/products/{cat_id}/{sid}"
-           f"?lang={lang}&limit={limit}&offset={offset}")
-    for attempt in range(3):
+    for attempt in range(4):
         try:
-            resp = await client.get(url, timeout=30)
+            resp = await client.get(
+                f"{API_BASE}/products/{cat_id}/{sid}?lang={lang}&limit={limit}&offset={offset}",
+                timeout=30,
+            )
             data = resp.json()
             if data.get("status") == 1:
                 result = data["result"]
@@ -268,57 +350,110 @@ async def fetch_products_page(
                     return result
                 if isinstance(result, dict):
                     return result.get("list") or result.get("products") or []
+            # сесія померла → перелогін і повтор із новим SID
+            if _looks_like_dead_session(data):
+                sid = await reauth(client)
+                continue
         except Exception as e:
-            if attempt == 2:
+            if attempt == 3:
                 log(f"   ⚠️ Кат.{cat_id} offset={offset}: {e}")
         await asyncio.sleep(1.5 ** attempt)
     return []
 
 
-async def fetch_product_full(client: httpx.AsyncClient, sid: str, pid: int, lang: str) -> dict:
+async def fetch_product_full(client: httpx.AsyncClient, sid: str, pid: int) -> dict:
     """
     Повна картка товару. Дає те, чого немає у списку /products:
     повний `description`, `koduktved`, а також `options` (характеристики).
-    Запитуємо `lang=ua_ru` — за ОДИН запит отримуємо обидві мови:
+    Завжди запитуємо `lang=ua_ru` — за ОДИН запит отримуємо обидві мови:
       name / description / country / options (укр)
       + name_ru / description_ru / country_ru / options_ru (рос).
-    Це дозволяє заповнити для KASTA і name_ua, і name_ru.
+    Це дозволяє заповнити для KASTA і name_ua, і name_ru, незалежно від
+    того, яку мову вибрано в Action (вона впливає лише на дерево категорій
+    і на Фазу 1 — обидві перекриваються цією двомовною Фазою 2).
     """
-    try:
-        r = await client.get(f"{API_BASE}/product/{pid}/{sid}?lang=ua_ru", timeout=20)
-        d = r.json()
-        if d.get("status") == 1 and isinstance(d.get("result"), dict):
-            return d["result"]
-    except Exception:
-        pass
+    for attempt in range(3):
+        try:
+            r = await client.get(f"{API_BASE}/product/{pid}/{sid}?lang=ua_ru", timeout=20)
+            d = r.json()
+            if d.get("status") == 1 and isinstance(d.get("result"), dict):
+                return d["result"]
+            if _looks_like_dead_session(d):
+                sid = await reauth(client)
+                continue
+            return {}
+        except Exception:
+            await asyncio.sleep(1.5 ** attempt)
     return {}
 
 
 async def fetch_pictures(client: httpx.AsyncClient, sid: str, pid: int) -> list:
-    try:
-        r = await client.get(f"{API_BASE}/product_pictures/{pid}/{sid}", timeout=15)
-        d = r.json()
-        if d.get("status") == 1:
-            result = d.get("result", [])
-            if isinstance(result, list):
-                return result
-            if isinstance(result, dict):
-                return result.get("pictures", [])
-    except Exception:
-        pass
+    for attempt in range(3):
+        try:
+            r = await client.get(f"{API_BASE}/product_pictures/{pid}/{sid}", timeout=15)
+            d = r.json()
+            if d.get("status") == 1:
+                result = d.get("result", [])
+                if isinstance(result, list):
+                    return result
+                if isinstance(result, dict):
+                    return result.get("pictures", [])
+            if _looks_like_dead_session(d):
+                sid = await reauth(client)
+                continue
+            return []
+        except Exception:
+            await asyncio.sleep(1.5 ** attempt)
     return []
 
 
+def _shard_filter(cat_ids: list) -> list:
+    """Залишає лише категорії цього shard-а (round-robin по відсортованому списку)."""
+    if SHARD_TOTAL <= 1:
+        return list(cat_ids)
+    ordered = sorted(set(int(c) for c in cat_ids))
+    mine = [c for i, c in enumerate(ordered) if i % SHARD_TOTAL == SHARD_INDEX]
+    log(f"🧩 Shard {SHARD_INDEX}/{SHARD_TOTAL}: {len(mine)}/{len(ordered)} категорій")
+    return mine
+
+
 async def fetch_all_products_full(
-    client: httpx.AsyncClient, sid: str, cat_ids: list, lang: str
+    client: httpx.AsyncClient, sid: str, cat_ids: list, lang: str,
+    out_cache: Path = CACHE_FILE, resume_from: list | None = None,
 ) -> list:
-    """FULL: базові дані + (повна картка з описом) + характеристики + фото. Кешуємо."""
+    """
+    FULL: базові дані + повна картка (опис+характеристики) + фото. Кешуємо.
+
+    Стійкість до збоїв/таймаутів Brain:
+      • TIME_BUDGET_MIN — коли час вичерпано, КОРЕКТНО зупиняємось, зберігши
+        вже завантажене (джоб виходить успішно, прогрес не втрачено).
+      • resume_from — товари, вже збагачені попереднім прогоном: не качаємо
+        повторно (продовжуємо з місця після таймауту/обриву).
+      • Чекпойнт кешу кожні CHECKPOINT_EVERY товарів.
+      • Помилка окремого товару НІКОЛИ не валить процес — товар пропускається.
+    """
+    deadline = (time.monotonic() + TIME_BUDGET_MIN * 60) if TIME_BUDGET_MIN > 0 else None
+    def time_left() -> bool:
+        return deadline is None or time.monotonic() < deadline
+
+    cat_ids = _shard_filter(cat_ids)
+
+    # уже збагачені товари з попереднього прогону (resume)
+    enriched_prev: dict[int, dict] = {}
+    for p in (resume_from or []):
+        pid = pid_of(p)
+        if pid is not None and is_enriched(p):
+            enriched_prev[pid] = p
+
     pool: dict[int, dict] = {}
 
     # Фаза 1: базові дані (список товарів)
     log("\n📦 Фаза 1: базові дані товарів...")
     skipped_oos = 0
     for i, cat_id in enumerate(cat_ids, 1):
+        if not time_left():
+            log("⏳ Бюджет часу вичерпано на Фазі 1 — зупиняюсь коректно.")
+            break
         offset = 0
         cat_count = 0
         while True:
@@ -326,9 +461,8 @@ async def fetch_all_products_full(
             if not products:
                 break
             for p in products:
-                pid = (p.get("productID") or p.get("product_id")
-                       or p.get("ID") or p.get("id"))
-                if not pid:
+                pid = pid_of(p)
+                if pid is None:
                     continue
                 # Пропускаємо відсутні ще ДО завантаження описів/фото — це головна
                 # економія часу. Обережно: фільтруємо лише коли дані про наявність
@@ -339,7 +473,7 @@ async def fetch_all_products_full(
                     skipped_oos += 1
                     continue
                 p["categoryID"] = p.get("categoryID", cat_id)
-                pool[int(pid)] = p
+                pool[pid] = p
                 cat_count += 1
             print(f"   [{i}/{len(cat_ids)}] Кат.{cat_id}: {offset + len(products)}", end="\r")
             if len(products) < 100:
@@ -352,46 +486,80 @@ async def fetch_all_products_full(
     log(f"\n✅ Фаза 1: {len(product_list)} товарів у наявності "
         f"(пропущено відсутніх: {skipped_oos})")
 
+    # ── RESUME: переносимо вже збагачені картки, не качаємо їх повторно ──
+    todo = []
+    reused = 0
+    for p in product_list:
+        pid = pid_of(p)
+        if pid is not None and pid in enriched_prev:
+            # беремо стару збагачену картку, але оновлюємо ціни/наявність зі свіжого списку
+            old = enriched_prev[pid]
+            for k in ("price", "price_uah", "retail_price_uah", "recommendable_price",
+                      "stocks", "stocks_expected", "available", "is_archive"):
+                if k in p:
+                    old[k] = p[k]
+            pool[pid] = old
+            reused += 1
+        else:
+            todo.append(p)
+    if reused:
+        log(f"♻️  Resume: повторно використано {reused} вже збагачених карток, "
+            f"докачати треба {len(todo)}")
+
     # Фаза 2: повна картка (опис + характеристики, обидві мови) + фото.
-    # Раніше робили 3 запити/товар (product + product_options + pictures).
-    # Тепер 2: повна картка `product` уже містить `options`, тож окремий
-    # product_options не потрібен — це ~1.5× швидше. Більший batch_sz.
+    # 2 запити/товар (product вже містить options). batch=4 ≈ ліміт Brain.
     log("📋 Фаза 2: опис + характеристики + фото (паралельно по 4)...")
-    total    = len(product_list)
-    batch_sz = 4  # 4 товари × 2 запити = 8 req / 2 сек ≈ ліміт Brain
+    total    = len(todo)
+    batch_sz = 4
+    CHECKPOINT_EVERY = 250
+    since_ckpt = 0
+    stopped_early = False
 
     for start in range(0, total, batch_sz):
-        batch = product_list[start:start + batch_sz]
-        pids  = [int(p.get("productID") or p.get("id")) for p in batch]
+        if not time_left():
+            log(f"\n⏳ Бюджет часу вичерпано на Фазі 2 ({start}/{total}) — "
+                f"зберігаю прогрес і виходжу коректно.")
+            stopped_early = True
+            break
+        batch = todo[start:start + batch_sz]
+        pids  = [pid_of(p) for p in batch]
 
         all_results = await asyncio.gather(*[
             asyncio.gather(
-                fetch_product_full(client, sid, pid, lang),
+                fetch_product_full(client, sid, pid),
                 fetch_pictures(client, sid, pid),
             )
             for pid in pids
-        ])
+        ], return_exceptions=True)
 
-        for p, (full, pics) in zip(batch, all_results):
-            # Повна картка містить description(+_ru), country, options(+_ru) тощо
+        for p, res in zip(batch, all_results):
+            # помилка цілого батч-елемента не валить прогін
+            if isinstance(res, Exception):
+                p.setdefault("pictures", [])
+                continue
+            full, pics = res
             if full:
                 for k, v in full.items():
-                    # не затираємо ціни/наявність зі списку, якщо у повній порожньо
                     if v not in (None, "", []):
                         p[k] = v
-            # options_ru не використовуємо (params у KASTA — укр) → не роздуваємо кеш
             p.pop("options_ru", None)
             p["pictures"] = pics
 
         done = min(start + batch_sz, total)
-        pct  = int(done / total * 100)
+        since_ckpt += len(batch)
+        if since_ckpt >= CHECKPOINT_EVERY:
+            save_cache(list(pool.values()), out_cache, quiet=True)
+            since_ckpt = 0
+        pct  = int(done / total * 100) if total else 100
         bar  = "█" * (pct // 5) + "░" * (20 - pct // 5)
         print(f"   [{bar}] {pct}% ({done}/{total})", end="\r")
         await asyncio.sleep(2)
 
-    log(f"\n✅ Фаза 2 завершена")
-    save_cache(product_list)
-    return product_list
+    final = list(pool.values())
+    log(f"\n{'⚠️ Фаза 2 ЗУПИНЕНА за часом' if stopped_early else '✅ Фаза 2 завершена'} "
+        f"— у кеші {len(final)} товарів")
+    save_cache(final, out_cache)
+    return final
 
 
 async def fetch_prices_only(
@@ -437,8 +605,8 @@ async def fetch_prices_only(
 #  КЕШ
 # ══════════════════════════════════════════════════════════════════
 
-def save_cache(products: list):
-    CACHE_FILE.write_text(
+def save_cache(products: list, path: Path = CACHE_FILE, quiet: bool = False):
+    path.write_text(
         json.dumps({
             "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "count":     len(products),
@@ -446,21 +614,35 @@ def save_cache(products: list):
         }, ensure_ascii=False),
         encoding="utf-8",
     )
-    size_mb = CACHE_FILE.stat().st_size / 1024 / 1024
-    log(f"💾 Кеш збережено: {len(products)} товарів ({size_mb:.1f} МБ)")
+    if not quiet:
+        size_mb = path.stat().st_size / 1024 / 1024
+        log(f"💾 Кеш збережено: {len(products)} товарів ({size_mb:.1f} МБ) → {path.name}")
 
 
-def load_cache() -> list:
-    if not CACHE_FILE.exists():
+def load_cache(path: Path = CACHE_FILE) -> list:
+    if not path.exists():
         return []
     try:
-        data = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         products = data.get("products", [])
-        log(f"📦 Кеш завантажено: {len(products)} товарів (створено {data.get('generated','?')})")
+        log(f"📦 Кеш завантажено: {len(products)} товарів з {path.name} (створено {data.get('generated','?')})")
         return products
     except Exception as e:
-        log(f"⚠️ Помилка читання кешу: {e}")
+        log(f"⚠️ Помилка читання кешу {path.name}: {e}")
         return []
+
+
+def pid_of(p: dict):
+    v = (p.get("productID") or p.get("product_id") or p.get("ID") or p.get("id"))
+    try:
+        return int(v) if v is not None else None
+    except Exception:
+        return None
+
+
+def is_enriched(p: dict) -> bool:
+    """Товар уже має повну картку (Фаза 2 пройдена) — можна не качати повторно."""
+    return ("pictures" in p) and (("options" in p) or ("description" in p))
 
 
 def apply_prices_to_cache(products: list, prices: dict) -> list:
@@ -605,17 +787,70 @@ def vendor_name(p: dict) -> str:
     return ""
 
 
+# Характеристики, що несуть РОЗМІР (для групування і для KASTA <param name="Розмір">).
+# Порядок = пріоритет: спершу явний «Розмір», далі дитячий «Зріст», потім взуття/шкарпетки.
+SIZE_PARAM_NAMES = (
+    "розмір", "размер",
+    "зріст", "рост",
+    "розмір взуття", "размер обуви",
+    "розмір шкарпеток", "довжина ступні", "длина ступни",
+)
+
+
+def size_value(product: dict):
+    """Значення розміру товару + назва характеристики-джерела (за пріоритетом)."""
+    opts = product.get("options", []) or []
+    for want in SIZE_PARAM_NAMES:
+        for o in opts:
+            if not isinstance(o, dict):
+                continue
+            n = str(o.get("OptionName") or o.get("name_ua") or o.get("name") or "").strip().lower()
+            if n == want:
+                v = safe(o.get("ValueName") or o.get("value_ua") or o.get("value") or "")
+                if v:
+                    return v, want
+    return "", ""
+
+
 def build_group_id(product: dict) -> str:
     """
-    Групування варіантів. Brain не дає офіційного поля,
-    тож обережно: ріжемо лише явні суфікси розмірів одягу/взуття.
-    Числові суфікси НЕ ріжемо (вони часто = модель, а не розмір).
+    Групування варіантів одного товару (різні розміри/зрости однієї моделі)
+    у ОДНУ картку маркетплейсу. Brain не дає офіційного поля групи, тож
+    ключ = артикул із вирізаним РОЗМІРОМ, але збереженою моделлю+кольором+статтю.
+
+    Розмір вирізаємо точково за РЕАЛЬНИМ значенням характеристики (Зріст/Розмір),
+    а не «будь-яке число» — інакше з'їдається код моделі (напр. G-202-146B: 202=модель).
+    Приклади:
+      EAD6513.0-3 / .3-6            → EAD6513        (віковий суфікс)
+      G-202-146B-blue / G-202-110B → G-202-B-blue   (зріст 146/110 вирізано)
+      7075-152B-black              → 7075-B-black
+      ISSA-10833-S / -M-yellow     → ISSA-10833-yellow (буквений розмір)
     """
     articul = safe(str(product.get("articul") or product.get("product_code") or ""))
     if not articul:
         return ""
-    group = re.sub(r'[-/_\s]+(XS|S|M|L|XL|XXL|XXXL|XXXXL)$', '', articul, flags=re.I)
-    return group if group and group != articul else ""
+    g = articul
+    # 1) віковий суфікс після крапки: .0-3, .9-12
+    g = re.sub(r'\.\d{1,2}\s*-\s*\d{1,2}(?=[-_./]|$)', '', g)
+
+    sv, _ = size_value(product)
+    nums = re.findall(r'\d{1,3}', sv)
+    # 2) зріст-діапазон у характеристиці (110-116 см) → вирізаємо такий діапазон з артикула
+    if len(nums) >= 2:
+        g = re.sub(rf'([.\-_/]){nums[0]}\s*-\s*{nums[-1]}([BG]?)(?=[.\-_/]|$)',
+                   r'\1\2', g, flags=re.I)
+    # 3) кожне число розміру/зросту — як окремий токен (зберігаємо літеру статі B/G)
+    for num in nums:
+        g = re.sub(rf'([.\-_/]){num}([BG]?)(?=[.\-_/]|$)', r'\1\2', g, flags=re.I)
+    # 4) буквений розмір одягу (дорослі): і як токен усередині, і як суфікс
+    letter = sv.strip().upper()
+    if re.fullmatch(r'(XS|S|M|L|XL|XXL|XXXL|XXXXL)', letter):
+        g = re.sub(rf'([.\-_/]){letter}(?=[.\-_/]|$)', r'\1', g, flags=re.I)
+    g = re.sub(r'[-/_\s]+(XS|S|M|L|XL|XXL|XXXL|XXXXL)$', '', g, flags=re.I)
+    # 5) прибрати здвоєні роздільники, що лишились
+    g = re.sub(r'[.\-_/]{2,}', '-', g).strip('-._/ ')
+
+    return g if g and g != articul else ""
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1129,6 +1364,7 @@ def build_kasta_feed_xml(
             SubElement(offer, "stock_quantity").text = str(qty)
 
             # ── ХАРАКТЕРИСТИКИ (стать НЕ дублюємо — вона вже у категорії) ──
+            has_rozmir = False
             for opt in p.get("options", []) or []:
                 if not isinstance(opt, dict):
                     continue
@@ -1138,9 +1374,21 @@ def build_kasta_feed_xml(
                     continue
                 if oname.strip().lower() in GENDER_PARAM_NAMES:
                     continue
+                if oname.strip().lower() in ("розмір", "размер"):
+                    has_rozmir = True
                 param = SubElement(offer, "param")
                 param.set("name", oname)
                 param.text = oval
+
+            # ── РОЗМІР для KASTA: якщо явного «Розмір» немає (дитячий одяг має
+            # «Зріст», взуття — «Розмір взуття») — додаємо <param name="Розмір">
+            # з відповідного джерела, інакше KASTA дасть SIZE_NOT_PROVIDED.
+            if not has_rozmir:
+                sv, _src = size_value(p)
+                if sv:
+                    pr = SubElement(offer, "param")
+                    pr.set("name", "Розмір")
+                    pr.text = sv
 
             offers_el.append(offer)
             added += 1
@@ -1176,32 +1424,188 @@ def build_kasta_feed_xml(
 #  ГОЛОВНА ФУНКЦІЯ
 # ══════════════════════════════════════════════════════════════════
 
-async def main():
-    base  = load_base_config()
-    feeds = load_feeds(base)
+def compute_needed(all_selected: set, all_cats: list) -> set:
+    """Вибрані категорії + усі їх нащадки — повний набір для завантаження."""
+    cat_map  = {c["categoryID"]: c for c in all_cats}
+    by_parent: dict[int, list] = {}
+    for c in all_cats:
+        by_parent.setdefault(c.get("parentID", 1), []).append(c["categoryID"])
+    needed = set()
+    for cid in all_selected:
+        if cid in cat_map:
+            needed |= get_all_descendants(by_parent, cid)
+    return needed
 
-    login    = base.get("login", "")
-    password = base.get("password", "")
-    mode     = base.get("mode", "quick")
-    shop_url = base.get("shop_url", "https://example.com.ua")
 
-    if not login or not password:
-        log("❌ Не задані BRAIN_LOGIN / BRAIN_PASSWORD"); sys.exit(1)
+# Поріг попередження про розмір XML. git push відхиляє файли >100МБ, тому
+# великі фіди ми віддаємо через GitHub Releases (до 2ГБ), а не commit у репо.
+SIZE_WARN_MB = 95
 
-    # усі категорії, потрібні хоч одному фіду
+def build_all_feeds(products: list, all_cats: list, feeds: list, shop_url: str) -> list:
+    """Будує XML для кожного фіда, прибирає осиротілі файли. Повертає статистику."""
+    log(f"\n{'─' * 55}")
+    results = []
+    current_ids = set()
+    for f in feeds:
+        out = OUTPUT_DIR / f"{f['id']}.xml"
+        if f.get("format") == "kasta":
+            stats = build_kasta_feed_xml(products, all_cats, f, shop_url, out)
+        else:
+            stats = build_feed_xml(products, all_cats, f, shop_url, out)
+        stats["id"] = f["id"]; stats["file"] = str(out)
+        results.append(stats)
+        current_ids.add(f["id"])
+        warn = f"  ⚠️ >{SIZE_WARN_MB}МБ — віддавати через Releases!" if stats["size_mb"] > SIZE_WARN_MB else ""
+        log(f"  ✅ {f['id']}.xml — товарів {stats['offers']}, "
+            f"категорій {stats['categories']}, {stats['size_mb']}МБ{warn}")
+
+    # прибирання осиротілих фідів (видалені з feeds.json)
+    for old in OUTPUT_DIR.glob("*.xml"):
+        if old.stem not in current_ids:
+            try:
+                old.unlink()
+                log(f"  🗑️  Видалено застарілий фід: {old.name}")
+            except Exception as e:
+                log(f"  ⚠️ Не вдалось видалити {old.name}: {e}")
+    return results
+
+
+def _export_link_block(results: list):
+    log(f"\n{'=' * 55}")
+    for r in results:
+        log(f"   • {r['id']}: output/{r['id']}.xml ({r['size_mb']}МБ)")
+    log(f"{'=' * 55}")
+
+
+async def stage_setup(client, base, feeds):
+    """SETUP: один auth + категорії. Віддає SID наступним джобам (через файл)."""
+    sid = await ensure_sid(client)
+    all_cats = await fetch_categories(client, sid, base["lang"])
+    save_categories_json(all_cats)
+    # передаємо SID shard-ам: у файл (workflow зчитає й замаскує) + у GITHUB_OUTPUT
+    Path(".brain_sid").write_text(sid, encoding="utf-8")
+    gh_out = os.environ.get("GITHUB_OUTPUT")
+    if gh_out:
+        with open(gh_out, "a", encoding="utf-8") as fh:
+            fh.write(f"sid={sid}\n")
+    log("✅ SETUP завершено: categories.json + SID готові для shard-ів")
+
+
+async def stage_shard(client, base, feeds):
+    """SHARD: качає СВОЮ частину категорій → products_cache.shard{N}.json."""
+    sid = await ensure_sid(client)
+    all_cats = load_categories_flat()
+    if not all_cats:
+        log("❌ SHARD: немає categories.json (setup не відпрацював?)"); sys.exit(1)
     all_selected = set()
     for f in feeds:
         all_selected |= set(f["category_ids"])
-    if not all_selected:
+    needed = compute_needed(all_selected, all_cats)
+    log(f"📋 Категорій усього (з нащадками): {len(needed)}")
+    # resume: попередній спільний кеш у репо дозволяє не качати вже зроблене
+    resume = load_cache(CACHE_FILE)
+    out_file = shard_cache_file(SHARD_INDEX)
+    await fetch_all_products_full(
+        client, sid, list(needed), base["lang"],
+        out_cache=out_file, resume_from=resume,
+    )
+    log(f"✅ SHARD {SHARD_INDEX}/{SHARD_TOTAL} завершено → {out_file.name}")
+
+
+def stage_merge(base, feeds):
+    """MERGE: збирає shard-кеші (+ попередній) в один кеш і будує XML."""
+    all_cats = load_categories_flat()
+    if not all_cats:
+        log("❌ MERGE: немає categories.json"); sys.exit(1)
+
+    # База — попередній спільний кеш: для зрізів, які якийсь shard не оновив
+    # (таймаут/збій Brain), лишаються останні відомі дані (graceful degradation).
+    combined: dict[int, dict] = {}
+    for p in load_cache(CACHE_FILE):
+        pid = pid_of(p)
+        if pid is not None:
+            combined[pid] = p
+    fresh = 0
+    for idx in range(SHARD_TOTAL):
+        sc = load_cache(shard_cache_file(idx))
+        for p in sc:
+            pid = pid_of(p)
+            if pid is not None:
+                combined[pid] = p   # свіжі дані shard-а авторитетні
+                fresh += 1
+    products = list(combined.values())
+    log(f"🧩 MERGE: {len(products)} товарів у спільному кеші (свіжих із shard-ів: {fresh})")
+    save_cache(products, CACHE_FILE)
+
+    results = build_all_feeds(products, all_cats, feeds, base["shop_url"])
+    _export_link_block(results)
+
+
+async def stage_solo(client, base, feeds, mode):
+    """SOLO: усе в одному процесі (локально або малий каталог)."""
+    sid = await ensure_sid(client)
+    try:
+        all_cats = await fetch_categories(client, sid, base["lang"])
+        save_categories_json(all_cats)
+        all_selected = set()
+        for f in feeds:
+            all_selected |= set(f["category_ids"])
+        needed = compute_needed(all_selected, all_cats)
+        log(f"📋 Категорій для завантаження (з нащадками): {len(needed)}")
+
+        if mode == "full":
+            products = await fetch_all_products_full(
+                client, sid, list(needed), base["lang"], resume_from=load_cache(CACHE_FILE))
+        else:
+            log("⚡ Quick: кеш + оновлення цін...")
+            products = load_cache()
+            if not products:
+                log("⚠️  Кеш порожній → FULL")
+                products = await fetch_all_products_full(client, sid, list(needed), base["lang"])
+            else:
+                prices   = await fetch_prices_only(client, sid, list(needed), base["lang"])
+                products = apply_prices_to_cache(products, prices)
+
+        results = build_all_feeds(products, all_cats, feeds, base["shop_url"])
+        _export_link_block(results)
+    finally:
+        await logout(client, sid)
+
+
+async def main():
+    base  = load_base_config()
+    feeds = load_feeds(base)
+    mode  = base.get("mode", "quick")
+
+    # MERGE — єдина стадія без мережі до Brain (працює з файлами)
+    if EXPORT_STAGE == "merge":
+        log("=" * 55); log("  Brain Exporter — стадія MERGE"); log("=" * 55)
+        stage_merge(base, feeds)
+        return
+
+    login    = base.get("login", "")
+    password = base.get("password", "")
+    if not login or not password:
+        log("❌ Не задані BRAIN_LOGIN / BRAIN_PASSWORD"); sys.exit(1)
+    _SID_STATE["login"], _SID_STATE["password"] = login, password
+    # спільний SID із setup-джоба (shard-и не логіняться повторно)
+    if os.environ.get("BRAIN_SID"):
+        _SID_STATE["sid"] = os.environ["BRAIN_SID"].strip()
+        log("🔑 Використовую спільний BRAIN_SID із setup-джоба")
+
+    all_selected = set()
+    for f in feeds:
+        all_selected |= set(f["category_ids"])
+    if EXPORT_STAGE in ("solo",) and not all_selected:
         log("❌ Жоден фід не має вибраних категорій"); sys.exit(1)
 
-    lang = base["lang"]
     log("=" * 55)
-    log(f"  Brain API → XML Exporter v4.0")
-    log(f"  Режим: {'🚀 FULL' if mode == 'full' else '⚡ QUICK'} | Фідів: {len(feeds)}")
+    log(f"  Brain API → XML Exporter v5.0 (sharded)")
+    log(f"  Стадія: {EXPORT_STAGE.upper()} | Режим: {'FULL' if mode=='full' else 'QUICK'} "
+        f"| Shard: {SHARD_INDEX}/{SHARD_TOTAL} | Фідів: {len(feeds)}")
     log("=" * 55)
 
-    if mode == "quick" and not CACHE_FILE.exists():
+    if EXPORT_STAGE == "solo" and mode == "quick" and not CACHE_FILE.exists():
         log("⚠️  Кеш не знайдено — перемикаємось на FULL")
         mode = "full"
 
@@ -1209,76 +1613,12 @@ async def main():
         timeout=30,
         limits=httpx.Limits(max_connections=15, max_keepalive_connections=10),
     ) as client:
-        sid = await auth(client, login, password)
-        try:
-            all_cats = await fetch_categories(client, sid, lang)
-            cat_map  = {c["categoryID"]: c for c in all_cats}
-            save_categories_json(all_cats)
-
-            by_parent: dict[int, list] = {}
-            for c in all_cats:
-                by_parent.setdefault(c.get("parentID", 1), []).append(c["categoryID"])
-
-            # повний набір категорій (вибрані + нащадки) для завантаження товарів
-            needed = set()
-            for cid in all_selected:
-                if cid in cat_map:
-                    needed |= get_all_descendants(by_parent, cid)
-            log(f"📋 Категорій для завантаження (з нащадками): {len(needed)}")
-
-            if mode == "full":
-                products = await fetch_all_products_full(client, sid, list(needed), lang)
-            else:
-                log("⚡ Quick: кеш + оновлення цін...")
-                products = load_cache()
-                if not products:
-                    log("⚠️  Кеш порожній → FULL")
-                    products = await fetch_all_products_full(client, sid, list(needed), lang)
-                else:
-                    prices   = await fetch_prices_only(client, sid, list(needed), lang)
-                    products = apply_prices_to_cache(products, prices)
-
-            # ── будуємо XML для КОЖНОГО фіда ──
-            log(f"\n{'─' * 55}")
-            # shop_url міг бути перевизначений у feeds.json (load_feeds оновив base)
-            shop_url = base.get("shop_url", "https://example.com.ua")
-            results = []
-            current_ids = set()
-            for f in feeds:
-                out = OUTPUT_DIR / f"{f['id']}.xml"
-                if f.get("format") == "kasta":
-                    stats = build_kasta_feed_xml(products, all_cats, f, shop_url, out)
-                else:
-                    stats = build_feed_xml(products, all_cats, f, shop_url, out)
-                stats["id"] = f["id"]; stats["file"] = str(out)
-                results.append(stats)
-                current_ids.add(f["id"])
-                warn = "  ⚠️ >180МБ!" if stats["size_mb"] > 180 else ""
-                log(f"  ✅ {f['id']}.xml — товарів {stats['offers']}, "
-                    f"категорій {stats['categories']}, {stats['size_mb']}МБ{warn}")
-
-            # ── ПРИБИРАННЯ ОСИРОТІЛИХ ФІДІВ ──
-            # Якщо фід видалили з feeds.json, його старий XML лишається в репо
-            # і маркетплейс тягне застарілі дані. Видаляємо такі файли.
-            for old in OUTPUT_DIR.glob("*.xml"):
-                if old.stem not in current_ids:
-                    try:
-                        old.unlink()
-                        log(f"  🗑️  Видалено застарілий фід: {old.name} "
-                            f"(його більше немає у feeds.json)")
-                    except Exception as e:
-                        log(f"  ⚠️ Не вдалось видалити {old.name}: {e}")
-
-            log(f"\n{'=' * 55}")
-            log(f"✅ Готово! Режим: {mode.upper()} | Фідів: {len(results)}")
-            log(f"   Постійні посилання (заміни АКАУНТ/РЕПО):")
-            for r in results:
-                log(f"   • {r['id']}: "
-                    f"https://raw.githubusercontent.com/АКАУНТ/РЕПО/main/output/{r['id']}.xml")
-            log(f"{'=' * 55}")
-
-        finally:
-            await logout(client, sid)
+        if EXPORT_STAGE == "setup":
+            await stage_setup(client, base, feeds)
+        elif EXPORT_STAGE == "shard":
+            await stage_shard(client, base, feeds)
+        else:
+            await stage_solo(client, base, feeds, mode)
 
 
 if __name__ == "__main__":
