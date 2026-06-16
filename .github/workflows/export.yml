@@ -108,6 +108,7 @@ jobs:
           BRAIN_PASSWORD: ${{ secrets.BRAIN_PASSWORD }}
           EXPORT_MODE:  quick
           EXPORT_STAGE: solo
+          TIME_BUDGET_MIN: "55"   # якщо кешу нема й буде FULL-fallback — встигнути зберегти до kill на 60хв
           LANG:         ${{ needs.prepare.outputs.lang }}
           SHOP_NAME:    ${{ env.SHOP_NAME }}
           SHOP_URL:     ${{ env.SHOP_URL }}
