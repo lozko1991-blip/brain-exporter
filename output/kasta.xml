@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<yml_catalog date="2026-06-15 20:58">
+<yml_catalog date="2026-06-16 11:17">
   <shop>
     <name>AVi</name>
     <company>AVi</company>
@@ -81118,7 +81118,7 @@
       <offer id="br100287059" available="true">
         <currencyId>UAH</currencyId>
         <categoryId>br8149</categoryId>
-        <price>370</price>
+        <price>368</price>
         <picture>https://opt.brain.com.ua/static/images/prod_img/5/3/U0809153_main.jpg</picture>
         <vendor>Canpol babies</vendor>
         <article>74/024_blu</article>
