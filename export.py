@@ -220,7 +220,15 @@ async def auth(client: httpx.AsyncClient, login: str, password: str) -> str:
 
 # Поточний робочий SID (може оновитись автоперелогіном). Глобал, щоб усі
 # fetch-функції бачили свіжий токен без передавання крізь усі виклики.
-_SID_STATE = {"sid": "", "login": "", "password": ""}
+# last_ts/count — захист від КАСКАДУ перелогінів: якщо Brain single-session
+# і вбиває старий SID на новий auth, shard-и могли б нескінченно
+# перелогінювати одне одного. Тротлимо й після ліміту зупиняємось коректно.
+_SID_STATE = {"sid": "", "login": "", "password": "", "reauth_ts": 0.0, "reauth_count": 0}
+REAUTH_MIN_INTERVAL = 30      # не частіше, ніж раз на 30 с
+REAUTH_MAX_TOTAL    = 12      # після стількох перелогінів — стоп (не дратуємо Brain)
+
+class StopFetching(Exception):
+    """Сигнал коректно зупинити завантаження (зберегти прогрес, не падати)."""
 
 def _looks_like_dead_session(data: dict) -> bool:
     """Чи відповідь Brain означає «сесія недійсна» (треба перелогінитись)."""
@@ -239,7 +247,24 @@ async def ensure_sid(client: httpx.AsyncClient) -> str:
     return _SID_STATE["sid"]
 
 async def reauth(client: httpx.AsyncClient) -> str:
-    """Примусовий перелогін (коли поточний SID відхилено Brain)."""
+    """
+    Примусовий перелогін (коли поточний SID відхилено Brain), з тротлінгом:
+      • не частіше REAUTH_MIN_INTERVAL — інакше чекаємо (щоб не «бомбити» auth);
+      • не більше REAUTH_MAX_TOTAL разів — інакше зупиняємось КОРЕКТНО
+        (StopFetching), бо це ознака проблеми з сесіями і подальші спроби лише
+        ризикують блокуванням акаунта. Прогрес уже збережено чекпойнтами.
+    """
+    _SID_STATE["reauth_count"] += 1
+    if _SID_STATE["reauth_count"] > REAUTH_MAX_TOTAL:
+        raise StopFetching(
+            f"забагато перелогінів ({_SID_STATE['reauth_count']}) — "
+            f"схоже, Brain не тримає паралельні/довгі сесії. Зупиняюсь, "
+            f"щоб не отримати блокування; прогрес збережено."
+        )
+    gap = time.monotonic() - _SID_STATE["reauth_ts"]
+    if gap < REAUTH_MIN_INTERVAL:
+        await asyncio.sleep(REAUTH_MIN_INTERVAL - gap)
+    _SID_STATE["reauth_ts"] = time.monotonic()
     _SID_STATE["sid"] = ""
     log("♻️  SID відхилено Brain — перелогінююсь...")
     return await ensure_sid(client)
@@ -354,6 +379,8 @@ async def fetch_products_page(
             if _looks_like_dead_session(data):
                 sid = await reauth(client)
                 continue
+        except StopFetching:
+            raise   # сигнал коректної зупинки — не ковтаємо
         except Exception as e:
             if attempt == 3:
                 log(f"   ⚠️ Кат.{cat_id} offset={offset}: {e}")
@@ -382,6 +409,8 @@ async def fetch_product_full(client: httpx.AsyncClient, sid: str, pid: int) -> d
                 sid = await reauth(client)
                 continue
             return {}
+        except StopFetching:
+            raise
         except Exception:
             await asyncio.sleep(1.5 ** attempt)
     return {}
@@ -402,6 +431,8 @@ async def fetch_pictures(client: httpx.AsyncClient, sid: str, pid: int) -> list:
                 sid = await reauth(client)
                 continue
             return []
+        except StopFetching:
+            raise
         except Exception:
             await asyncio.sleep(1.5 ** attempt)
     return []
@@ -450,6 +481,7 @@ async def fetch_all_products_full(
     # Фаза 1: базові дані (список товарів)
     log("\n📦 Фаза 1: базові дані товарів...")
     skipped_oos = 0
+    phase1_stopped = False
     for i, cat_id in enumerate(cat_ids, 1):
         if not time_left():
             log("⏳ Бюджет часу вичерпано на Фазі 1 — зупиняюсь коректно.")
@@ -457,7 +489,12 @@ async def fetch_all_products_full(
         offset = 0
         cat_count = 0
         while True:
-            products = await fetch_products_page(client, sid, cat_id, lang, offset)
+            try:
+                products = await fetch_products_page(client, sid, cat_id, lang, offset)
+            except StopFetching as e:
+                log(f"\n🛑 Зупинка завантаження: {e}")
+                phase1_stopped = True
+                break
             if not products:
                 break
             for p in products:
@@ -481,6 +518,8 @@ async def fetch_all_products_full(
             offset += 100
             await asyncio.sleep(0.4)
         log(f"   [{i}/{len(cat_ids)}] Категорія {cat_id}: {cat_count} в наявності")
+        if phase1_stopped:
+            break
 
     product_list = list(pool.values())
     log(f"\n✅ Фаза 1: {len(product_list)} товарів у наявності "
@@ -531,6 +570,13 @@ async def fetch_all_products_full(
             )
             for pid in pids
         ], return_exceptions=True)
+
+        # сигнал коректної зупинки (каскад перелогінів) — зберігаємо й виходимо
+        if any(isinstance(res, StopFetching) for res in all_results):
+            log(f"\n🛑 Зупинка завантаження на Фазі 2 ({start}/{total}) — "
+                f"забагато перелогінів. Прогрес збережено.")
+            stopped_early = True
+            break
 
         for p, res in zip(batch, all_results):
             # помилка цілого батч-елемента не валить прогін

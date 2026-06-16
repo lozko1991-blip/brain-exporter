@@ -5,8 +5,13 @@ secrets.json
 secrets.local.json
 *.secret
 
-# Кеш товарів (великий, відновлюється автоматично)
+# Кеш товарів (великий, живе у GitHub Release, не в git)
 products_cache.json
+products_cache.shard*.json
+# SID сесії Brain (передається між джобами, ніколи не комітити)
+.brain_sid
+# Згенеровані XML-фіди — віддаються через GitHub Release (можуть бути >100МБ)
+output/*.xml
 
 # Python
 __pycache__/
