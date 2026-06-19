@@ -1,6 +1,6 @@
 {
-  "generated": "2026-06-18 20:28",
-  "total": 2788,
+  "generated": "2026-06-19 10:41",
+  "total": 2789,
   "categories": [
     {
       "categoryID": 1181,
@@ -2728,6 +2728,12 @@
                   "categoryID": 10444,
                   "parentID": 9812,
                   "name": "Модулі AI трекінгу",
+                  "children": []
+                },
+                {
+                  "categoryID": 10453,
+                  "parentID": 9812,
+                  "name": "Сенсори для дронів",
                   "children": []
                 }
               ]
