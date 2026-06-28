@@ -232,20 +232,37 @@
     </div>
   </div>
 
-  <!-- Генерований feeds.json -->
+  <!-- Збереження та Автоматизація -->
   <div class="card">
     <div class="chead">
-      <div class="ctitle">⚙️ Твій feeds.json</div>
-      <button class="copy-btn" id="copy-btn" onclick="copyConfig()">📋 Копіювати</button>
+      <div class="ctitle">⚙️ Збереження та Автоматизація</div>
     </div>
     <div class="cbody">
-      <div class="config-box" id="config-output">{ }</div>
-      <div class="info" style="margin-top:12px">
-        <b>Що робити з цим файлом:</b><br>
-        1. Натисни "Копіювати" вгорі<br>
-        2. Відкрий GitHub → твій репозиторій → файл <code>feeds.json</code> (створи, якщо немає)<br>
-        3. Edit → встав скопійований текст → Commit<br>
-        4. GitHub Actions згенерує по одному XML на кожен фід
+      <div class="fld" style="margin-bottom:14px">
+        <label>GitHub Personal Access Token (для збереження без копіювання)</label>
+        <input type="password" id="gh-token" placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx" oninput="saveToken()">
+      </div>
+      
+      <div id="gh-actions" style="display:none; gap:10px; flex-wrap:wrap; margin-bottom:14px">
+        <button class="copy-btn" onclick="saveToGitHub()" style="border-color:var(--green); color:var(--green)">☁️ Зберегти на GitHub</button>
+        <button class="copy-btn" onclick="triggerExport('quick')" style="border-color:var(--amber); color:var(--amber)">⚡ Часткове оновлення (швидке)</button>
+        <button class="copy-btn" onclick="triggerExport('full')" style="border-color:var(--blue); color:var(--blue)">🚀 Повне оновлення (усі дані)</button>
+      </div>
+
+      <div id="api-log" style="font-size:11px; color:var(--t3); margin-top:10px; margin-bottom:14px; white-space:pre-wrap"></div>
+
+      <div id="manual-actions">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px">
+          <span style="font-size:12px; color:var(--t2)">Ваш feeds.json:</span>
+          <button class="copy-btn" id="copy-btn" onclick="copyConfig()" style="padding:6px 12px">📋 Копіювати</button>
+        </div>
+        <div class="config-box" id="config-output">{ }</div>
+        <div class="info" id="manual-info">
+          <b>Що робити з цим файлом (Ручний режим):</b><br>
+          1. Натисни "Копіювати" вгорі<br>
+          2. Відкрий GitHub → твій репозиторій → файл <code>feeds.json</code><br>
+          3. Edit → встав скопійований текст → Commit<br>
+        </div>
       </div>
     </div>
   </div>
@@ -281,6 +298,16 @@ const ITEMS_PER_CAT = 150;
 let feeds = [];
 let activeFeed = 0;
 let GH = { account: "lozko1991-blip", repo: "brain-exporter" };
+
+function detectGH() {
+  const host = window.location.hostname;
+  const path = window.location.pathname;
+  if (host.includes('github.io')) {
+    GH.account = host.split('.')[0];
+    GH.repo = path.split('/')[1] || 'brain-exporter';
+  }
+}
+detectGH();
 
 function newFeed(name) {
   return { id: slug(name), name, selected: new Set(), splitCats: new Set(),
@@ -680,7 +707,91 @@ function copyConfig() {
   });
 }
 
+// ── GitHub API ────────────────────────────────────────────────────
+function initToken() {
+  const t = localStorage.getItem('gh_token');
+  if (t) document.getElementById('gh-token').value = t;
+  toggleGHMode();
+}
+function saveToken() {
+  const t = document.getElementById('gh-token').value.trim();
+  if (t) localStorage.setItem('gh_token', t);
+  else localStorage.removeItem('gh_token');
+  toggleGHMode();
+}
+function toggleGHMode() {
+  const t = !!localStorage.getItem('gh_token');
+  document.getElementById('gh-actions').style.display = t ? 'flex' : 'none';
+  document.getElementById('manual-info').style.display = t ? 'none' : 'block';
+}
+function getGHHeaders() {
+  return {
+    "Accept": "application/vnd.github+json",
+    "Authorization": "Bearer " + localStorage.getItem('gh_token'),
+    "X-GitHub-Api-Version": "2022-11-28"
+  };
+}
+async function saveToGitHub() {
+  const logDiv = document.getElementById('api-log');
+  logDiv.textContent = '⏳ Отримання поточного файлу feeds.json...';
+  const url = `https://api.github.com/repos/${GH.account}/${GH.repo}/contents/feeds.json`;
+  let sha = null;
+  try {
+    const r = await fetch(url, { headers: getGHHeaders() });
+    if (r.ok) {
+      const data = await r.json();
+      sha = data.sha;
+    }
+  } catch (e) { console.log(e); }
+  
+  logDiv.textContent = '⏳ Збереження нових налаштувань...';
+  const content = document.getElementById('config-output').textContent;
+  const body = {
+    message: "Update feeds.json via Web UI",
+    content: btoa(unescape(encodeURIComponent(content)))
+  };
+  if (sha) body.sha = sha;
+  
+  try {
+    const r = await fetch(url, {
+      method: 'PUT',
+      headers: getGHHeaders(),
+      body: JSON.stringify(body)
+    });
+    if (r.ok) {
+      logDiv.innerHTML = '<span style="color:var(--green)">✅ Файл feeds.json успішно збережено на GitHub! Тепер ви можете запустити оновлення.</span>';
+    } else {
+      const e = await r.json();
+      logDiv.innerHTML = `<span style="color:var(--red)">❌ Помилка: ${e.message}</span>`;
+    }
+  } catch (e) {
+    logDiv.innerHTML = `<span style="color:var(--red)">❌ Помилка: ${e.message}</span>`;
+  }
+}
+async function triggerExport(mode) {
+  const lang = feeds[activeFeed]?.lang || 'ua';
+  const logDiv = document.getElementById('api-log');
+  logDiv.textContent = `⏳ Запуск GitHub Actions (${mode} оновлення)...`;
+  const url = `https://api.github.com/repos/${GH.account}/${GH.repo}/actions/workflows/export.yml/dispatches`;
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: getGHHeaders(),
+      body: JSON.stringify({ ref: 'main', inputs: { mode, lang } })
+    });
+    if (r.ok) {
+      logDiv.innerHTML = `<span style="color:var(--green)">✅ Процес експорту (${mode}) успішно запущено на серверах GitHub!</span>`;
+    } else {
+      const e = await r.json();
+      logDiv.innerHTML = `<span style="color:var(--red)">❌ Помилка запуску: ${e.message}</span>`;
+    }
+  } catch (e) {
+    logDiv.innerHTML = `<span style="color:var(--red)">❌ Помилка: ${e.message}</span>`;
+  }
+}
+
 // ── Ініціалізація ─────────────────────────────────────────────────
+initToken();
 loadCategories();
 </script>
 </body>

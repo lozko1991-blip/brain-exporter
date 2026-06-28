@@ -22,3 +22,6 @@ venv/
 # Системне
 .DS_Store
 Thumbs.db
+
+# Бекапи коду перед правками
+backups/

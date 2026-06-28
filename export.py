@@ -83,7 +83,13 @@ def cid_ext(cid) -> str:
 # ══════════════════════════════════════════════════════════════════
 
 def log(msg: str):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+    import sys
+    text = f"[{datetime.now().strftime('%H:%M:%S')}] {msg}"
+    try:
+        print(text, flush=True)
+    except UnicodeEncodeError:
+        enc = sys.stdout.encoding or "utf-8"
+        print(text.encode(enc, errors="replace").decode(enc), flush=True)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -284,10 +290,26 @@ async def logout(client: httpx.AsyncClient, sid: str):
 
 async def fetch_categories(client: httpx.AsyncClient, sid: str, lang: str) -> list:
     log("📂 Завантаження категорій...")
-    resp = await client.get(f"{API_BASE}/categories/{sid}?lang={lang}", timeout=20)
-    cats = resp.json().get("result", [])
-    log(f"   Знайдено: {len(cats)} категорій")
-    return cats
+    for attempt in range(4):
+        try:
+            current_sid = _SID_STATE["sid"] or sid
+            resp = await client.get(f"{API_BASE}/categories/{current_sid}?lang={lang}", timeout=20)
+            data = resp.json()
+            if data.get("status") == 1:
+                cats = data.get("result", [])
+                log(f"   Знайдено: {len(cats)} категорій")
+                return cats
+            if _looks_like_dead_session(data):
+                sid = await reauth(client)
+                continue
+            log(f"   ⚠️ Неуспішна відповідь категорій (спроба {attempt+1}): {data}")
+        except StopFetching:
+            raise
+        except Exception as e:
+            if attempt == 3:
+                log(f"   ❌ Помилка завантаження категорій: {e}")
+        await asyncio.sleep(1.5 ** attempt)
+    return []
 
 
 def load_categories_flat() -> list:
@@ -364,8 +386,9 @@ async def fetch_products_page(
 ) -> list:
     for attempt in range(4):
         try:
+            current_sid = _SID_STATE["sid"] or sid
             resp = await client.get(
-                f"{API_BASE}/products/{cat_id}/{sid}?lang={lang}&limit={limit}&offset={offset}",
+                f"{API_BASE}/products/{cat_id}/{current_sid}?lang={lang}&limit={limit}&offset={offset}",
                 timeout=30,
             )
             data = resp.json()
@@ -401,25 +424,29 @@ async def fetch_product_full(client: httpx.AsyncClient, sid: str, pid: int) -> d
     """
     for attempt in range(3):
         try:
-            r = await client.get(f"{API_BASE}/product/{pid}/{sid}?lang=ua_ru", timeout=20)
+            current_sid = _SID_STATE["sid"] or sid
+            r = await client.get(f"{API_BASE}/product/{pid}/{current_sid}?lang=ua_ru", timeout=20)
             d = r.json()
             if d.get("status") == 1 and isinstance(d.get("result"), dict):
                 return d["result"]
             if _looks_like_dead_session(d):
                 sid = await reauth(client)
                 continue
-            return {}
+            # Якщо status != 1, але сесія жива — це може бути тимчасовий збій API (rate limit / error)
+            # Чекаємо і повторюємо
         except StopFetching:
             raise
         except Exception:
-            await asyncio.sleep(1.5 ** attempt)
+            pass
+        await asyncio.sleep(1.5 ** attempt)
     return {}
 
 
 async def fetch_pictures(client: httpx.AsyncClient, sid: str, pid: int) -> list:
     for attempt in range(3):
         try:
-            r = await client.get(f"{API_BASE}/product_pictures/{pid}/{sid}", timeout=15)
+            current_sid = _SID_STATE["sid"] or sid
+            r = await client.get(f"{API_BASE}/product_pictures/{pid}/{current_sid}", timeout=15)
             d = r.json()
             if d.get("status") == 1:
                 result = d.get("result", [])
@@ -430,11 +457,12 @@ async def fetch_pictures(client: httpx.AsyncClient, sid: str, pid: int) -> list:
             if _looks_like_dead_session(d):
                 sid = await reauth(client)
                 continue
-            return []
+            # Тимчасовий збій
         except StopFetching:
             raise
         except Exception:
-            await asyncio.sleep(1.5 ** attempt)
+            pass
+        await asyncio.sleep(1.5 ** attempt)
     return []
 
 
@@ -611,32 +639,23 @@ async def fetch_all_products_full(
 async def fetch_prices_only(
     client: httpx.AsyncClient, sid: str, cat_ids: list, lang: str
 ) -> dict:
-    """QUICK: тільки ціни і наявність. pid → {ціни, stocks, is_archive}."""
+    """QUICK: тільки ціни і наявність. pid → basic_product_dict."""
     log("\n⚡ Quick: завантаження цін і наявності...")
     prices = {}
     for i, cat_id in enumerate(cat_ids, 1):
         offset = 0
         while True:
-            products = await fetch_products_page(client, sid, cat_id, lang, offset)
+            # Використовуємо глобальний SID
+            current_sid = _SID_STATE["sid"] or sid
+            products = await fetch_products_page(client, current_sid, cat_id, lang, offset)
             if not products:
                 break
             for p in products:
                 pid = (p.get("productID") or p.get("product_id")
                        or p.get("ID") or p.get("id"))
                 if pid:
-                    prices[int(pid)] = {
-                        "price":               p.get("price", 0),
-                        "price_uah":           p.get("price_uah", 0),
-                        "retail_price_uah":    p.get("retail_price_uah", 0),
-                        "recommendable_price": p.get("recommendable_price", 0),
-                        # ВАЖЛИВО: не підставляти [] / {} за замовчуванням —
-                        # інакше товари акаунта без полів залишку «обнуляться».
-                        # None зберігає факт «поля немає» (stock_qty трактує як в наявності).
-                        "stocks":              p.get("stocks"),
-                        "stocks_expected":     p.get("stocks_expected", {}),
-                        "available":           p.get("available"),
-                        "is_archive":          p.get("is_archive", 0),
-                    }
+                    p["categoryID"] = p.get("categoryID") or cat_id
+                    prices[int(pid)] = p
             print(f"   [{i}/{len(cat_ids)}] Кат.{cat_id}: {offset + len(products)}", end="\r")
             if len(products) < 100:
                 break
@@ -645,6 +664,52 @@ async def fetch_prices_only(
         log(f"   [{i}/{len(cat_ids)}] Категорія {cat_id}: {len(prices)} товарів (накопич.)")
     log(f"✅ Ціни отримані: {len(prices)} товарів")
     return prices
+
+
+async def enrich_products(client: httpx.AsyncClient, sid: str, todo: list) -> list:
+    """Отримує повний опис, характеристики та фотографії для списку товарів (Фаза 2 для нових товарів)."""
+    if not todo:
+        return todo
+    log(f"📋 Збагачення {len(todo)} нових товарів (опис + фото, паралельно по 4)...")
+    total = len(todo)
+    batch_sz = 4
+    for start in range(0, total, batch_sz):
+        batch = todo[start:start + batch_sz]
+        pids  = [pid_of(p) for p in batch]
+        
+        # Використовуємо глобальний SID
+        current_sid = _SID_STATE["sid"] or sid
+        all_results = await asyncio.gather(*[
+            asyncio.gather(
+                fetch_product_full(client, current_sid, pid),
+                fetch_pictures(client, current_sid, pid),
+            )
+            for pid in pids
+        ], return_exceptions=True)
+
+        if any(isinstance(res, StopFetching) for res in all_results):
+            log(f"🛑 Зупинка збагачення: забагато перелогінів.")
+            break
+
+        for p, res in zip(batch, all_results):
+            if isinstance(res, Exception):
+                p.setdefault("pictures", [])
+                continue
+            full, pics = res
+            if full:
+                for k, v in full.items():
+                    if v not in (None, "", []):
+                        p[k] = v
+            p.pop("options_ru", None)
+            p["pictures"] = pics
+            
+        done = min(start + batch_sz, total)
+        pct = int(done / total * 100) if total else 100
+        bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+        print(f"   [{bar}] {pct}% ({done}/{total})", end="\r")
+        await asyncio.sleep(2)
+    print()  # Новий рядок після завершення прогрес-бару
+    return todo
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -697,14 +762,14 @@ def apply_prices_to_cache(products: list, prices: dict) -> list:
         pid = int(p.get("productID") or p.get("id") or 0)
         if pid and pid in prices:
             new = prices[pid]
-            p["price"]               = new["price"]
-            p["price_uah"]           = new["price_uah"]
-            p["retail_price_uah"]    = new["retail_price_uah"]
-            p["recommendable_price"] = new["recommendable_price"]
-            p["stocks"]              = new["stocks"]
-            p["stocks_expected"]     = new["stocks_expected"]
-            p["available"]           = new["available"]
-            p["is_archive"]          = new["is_archive"]
+            p["price"]               = new.get("price", 0)
+            p["price_uah"]           = new.get("price_uah", 0)
+            p["retail_price_uah"]    = new.get("retail_price_uah", 0)
+            p["recommendable_price"] = new.get("recommendable_price", 0)
+            p["stocks"]              = new.get("stocks")
+            p["stocks_expected"]     = new.get("stocks_expected")
+            p["available"]           = new.get("available")
+            p["is_archive"]          = new.get("is_archive", 0)
             updated += 1
         else:
             # Товару більше немає у свіжому списку категорії → вважаємо відсутнім.
@@ -1483,6 +1548,23 @@ def compute_needed(all_selected: set, all_cats: list) -> set:
     return needed
 
 
+def get_root_selected_categories(all_selected: set, all_cats: list) -> set:
+    """Повертає лише ті вибрані категорії, які не мають батьківських категорій серед вибраних (для уникнення дублюючих запитів)."""
+    cat_map = {c["categoryID"]: c for c in all_cats}
+    roots = set()
+    for cid in all_selected:
+        has_selected_ancestor = False
+        pid = cat_map.get(cid, {}).get("parentID", 1)
+        while pid and pid != 1:
+            if pid in all_selected:
+                has_selected_ancestor = True
+                break
+            pid = cat_map.get(pid, {}).get("parentID", 1)
+        if not has_selected_ancestor:
+            roots.add(cid)
+    return roots
+
+
 # Поріг попередження про розмір XML. git push відхиляє файли >100МБ, тому
 # великі фіди ми віддаємо через GitHub Releases (до 2ГБ), а не commit у репо.
 SIZE_WARN_MB = 95
@@ -1547,12 +1629,13 @@ async def stage_shard(client, base, feeds):
     for f in feeds:
         all_selected |= set(f["category_ids"])
     needed = compute_needed(all_selected, all_cats)
-    log(f"📋 Категорій усього (з нащадками): {len(needed)}")
+    fetch_ids = get_root_selected_categories(all_selected, all_cats)
+    log(f"📋 Категорій усього (оптимізовано/з нащадками): {len(fetch_ids)}/{len(needed)}")
     # resume: попередній спільний кеш у репо дозволяє не качати вже зроблене
     resume = load_cache(CACHE_FILE)
     out_file = shard_cache_file(SHARD_INDEX)
     await fetch_all_products_full(
-        client, sid, list(needed), base["lang"],
+        client, sid, list(fetch_ids), base["lang"],
         out_cache=out_file, resume_from=resume,
     )
     log(f"✅ SHARD {SHARD_INDEX}/{SHARD_TOTAL} завершено → {out_file.name}")
@@ -1597,20 +1680,43 @@ async def stage_solo(client, base, feeds, mode):
         for f in feeds:
             all_selected |= set(f["category_ids"])
         needed = compute_needed(all_selected, all_cats)
-        log(f"📋 Категорій для завантаження (з нащадками): {len(needed)}")
+        fetch_ids = get_root_selected_categories(all_selected, all_cats)
+        log(f"📋 Категорій для завантаження (оптимізовано/з нащадками): {len(fetch_ids)}/{len(needed)}")
 
         if mode == "full":
             products = await fetch_all_products_full(
-                client, sid, list(needed), base["lang"], resume_from=load_cache(CACHE_FILE))
+                client, sid, list(fetch_ids), base["lang"], resume_from=load_cache(CACHE_FILE))
         else:
             log("⚡ Quick: кеш + оновлення цін...")
             products = load_cache()
             if not products:
                 log("⚠️  Кеш порожній → FULL")
-                products = await fetch_all_products_full(client, sid, list(needed), base["lang"])
+                products = await fetch_all_products_full(client, sid, list(fetch_ids), base["lang"])
             else:
-                prices   = await fetch_prices_only(client, sid, list(needed), base["lang"])
+                prices = await fetch_prices_only(client, sid, list(fetch_ids), base["lang"])
+                
+                # 1. Визначаємо нові товари, яких немає у кеші
+                existing_pids = {int(p.get("productID") or p.get("id") or 0) for p in products}
+                todo_new = []
+                for pid, p in prices.items():
+                    if pid not in existing_pids:
+                        is_archive = is_true(p.get("is_archive", False))
+                        has_stock_field = ("stocks" in p) or ("available" in p)
+                        if not (is_archive or (has_stock_field and stock_qty(p) == 0)):
+                            todo_new.append(p)
+                
+                # 2. Збагачуємо нові товари (Фаза 2)
+                if todo_new:
+                    log(f"🆕 Знайдено {len(todo_new)} нових товарів у QUICK. Завантажуємо повні дані...")
+                    current_sid = _SID_STATE["sid"] or sid
+                    enriched_new = await enrich_products(client, current_sid, todo_new)
+                    products.extend(enriched_new)
+                
+                # 3. Оновлюємо ціни для старих товарів
                 products = apply_prices_to_cache(products, prices)
+                
+                # 4. Зберігаємо свіжий кеш
+                save_cache(products)
 
         results = build_all_feeds(products, all_cats, feeds, base["shop_url"])
         _export_link_block(results)
