@@ -1,6 +1,6 @@
 {
-  "generated": "2026-06-29 20:04",
-  "total": 2789,
+  "generated": "2026-06-30 09:41",
+  "total": 2791,
   "categories": [
     {
       "categoryID": 1181,
@@ -13271,6 +13271,18 @@
           "categoryID": 10334,
           "parentID": 8558,
           "name": "Розпилювачі для олії та оцту",
+          "children": []
+        },
+        {
+          "categoryID": 10454,
+          "parentID": 8558,
+          "name": "Кришки вакуумні",
+          "children": []
+        },
+        {
+          "categoryID": 10455,
+          "parentID": 8558,
+          "name": "Вакуумні насоси",
           "children": []
         }
       ]
