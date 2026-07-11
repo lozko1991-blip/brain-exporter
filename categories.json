@@ -1,6 +1,6 @@
 {
-  "generated": "2026-07-11 03:59",
-  "total": 2791,
+  "generated": "2026-07-11 07:59",
+  "total": 2797,
   "categories": [
     {
       "categoryID": 1181,
@@ -3395,6 +3395,12 @@
               ]
             },
             {
+              "categoryID": 10456,
+              "parentID": 7383,
+              "name": "Дублікатори безконтактних карт",
+              "children": []
+            },
+            {
               "categoryID": 8747,
               "parentID": 7383,
               "name": "ПЗ для охоронних систем",
@@ -5551,6 +5557,36 @@
               "categoryID": 10169,
               "parentID": 8302,
               "name": "Сівалки",
+              "children": []
+            },
+            {
+              "categoryID": 10457,
+              "parentID": 8302,
+              "name": "Підйомники пересувні",
+              "children": []
+            },
+            {
+              "categoryID": 10458,
+              "parentID": 8302,
+              "name": "Лазерні гравери",
+              "children": []
+            },
+            {
+              "categoryID": 10459,
+              "parentID": 8302,
+              "name": "Ремкомплекти для інструменту",
+              "children": []
+            },
+            {
+              "categoryID": 10460,
+              "parentID": 8302,
+              "name": "Пневматичні розпилювачі",
+              "children": []
+            },
+            {
+              "categoryID": 10461,
+              "parentID": 8302,
+              "name": "Лекала та шаблони для розмітки",
               "children": []
             }
           ]
