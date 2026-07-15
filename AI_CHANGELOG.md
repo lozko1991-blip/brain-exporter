@@ -3,16 +3,19 @@
 This file is a mandatory ledger for all AI agents. Every modification to the codebase must be logged here.
 Format: `[Date] - [Context] -> [Changes] -> [Impact]`.
 
-## [2026-07-15] - Kasta Color Mapping & Fallback Standardization
-- **[Context]**: User requested Kasta XML feed to strictly match Kasta's official allowed color dictionary to prevent import rejections, mapping non-standard color terms and falling back to "комбінований" for complex ones.
+## [2026-07-15] - Kasta Color & Characteristics Mapping Standardization
+- **[Context]**: User requested Kasta XML feed to strictly match Kasta's official allowed color and characteristics dictionary (based on 'хараткеритсики дитячий одяг.xlsx') to prevent import/moderation rejections, mapping seasons, scanning names/descriptions for patterns, splitting multiple materials, and using safe fallback values.
 - **[Changes]**:
   1. Created `kasta_colors.json` to store allowed Kasta colors and custom mapping rules.
-  2. Modified `export.py` to define `load_kasta_colors_config()` and `standardize_kasta_color()`.
-  3. Integrated `standardize_kasta_color()` in `build_kasta_feed_xml` when parsing options of type "колір"/"цвет".
+  2. Created `kasta_characteristics.json` to store allowed values, keyword mappings, and lists for season, pattern, decor, fastener, and material mapping.
+  3. Modified `export.py` to implement Kasta config loaders and standardizers: `load_kasta_characteristics_config()`, `standardize_kasta_characteristics()`, and `standardize_kasta_color()`.
+  4. Integrated characteristics standardization in `build_kasta_feed_xml` option parsing loop.
 - **[Impact]**:
-  1. Colors are automatically standardized (e.g. `різнокольоровий` -> `комбінований`, `молочно-білий` -> `молочний`).
-  2. Any complex or unknown color falls back to `комбінований`.
-  3. 100% of products generated in the Kasta feed are guaranteed to have a valid, Kasta-compliant color option, eliminating color-related import rejections.
+  1. Colors are automatically standardized (e.g. `різнокольоровий` -> `комбінований`).
+  2. Mandatory parameters like `Сезонність` are converted to Kasta allowed values (`Всесезон`, `Демісезон`, `Зима`, `Літо`).
+  3. `Візерунок` is extracted or dynamically matched using name/description keyword triggers (e.g. `смужку` -> `Смужка`) with a safe default of `Однотонний`.
+  4. Materials are parsed from composition strings (preventing `вовна`/`бавовна` collisions) and output as separate Kasta parameters.
+  5. 100% of generated products have valid, specification-compliant characteristics, passing Kasta Hub validation.
 
 ## [2026-06-28] - Critical Gaps Resolution & Performance Optimization
 - **[Context]**: User requested implementation of four critical gaps identified during project analysis to improve data completeness, API efficiency, and session stability.

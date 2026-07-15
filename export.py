@@ -41,6 +41,7 @@ CACHE_FILE = Path("products_cache.json")
 CATS_FILE  = Path("categories.json")
 FEEDS_FILE = Path("feeds.json")
 KASTA_COLORS_FILE = Path("kasta_colors.json")
+KASTA_CHARS_FILE = Path("kasta_characteristics.json")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # ══════════════════════════════════════════════════════════════════
@@ -995,7 +996,151 @@ def standardize_kasta_color(color_val: str, kasta_cfg: dict) -> str:
         # повертаємо 'комбінований' як безпечний fallback
         return "комбінований"
         
-    return val
+        return val
+
+
+def load_kasta_characteristics_config() -> dict:
+    """Завантажує конфігурацію характеристик для Kasta з kasta_characteristics.json."""
+    if KASTA_CHARS_FILE.exists():
+        try:
+            return json.loads(KASTA_CHARS_FILE.read_text(encoding="utf-8"))
+        except Exception as e:
+            log(f"   ⚠️ Не вдалося завантажити {KASTA_CHARS_FILE}: {e}")
+    return {}
+
+
+def standardize_kasta_characteristics(p: dict, kasta_char_cfg: dict) -> list[dict]:
+    """
+    Повертає стандартизований список характеристик [{'name': '...', 'value': '...'}]
+    для товару `p` відповідно до вимог Kasta.
+    """
+    options = p.get("options", []) or []
+    out = []
+    
+    # Текстові джерела для пошуку ключових слів (візерунок)
+    name_ua = str(p.get("name_ua") or p.get("name") or "").lower()
+    desc_ua = str(p.get("description") or p.get("brief_description") or "").lower()
+    search_text = f"{name_ua} {desc_ua}"
+    
+    # ── 1. Збираємо оригінальні параметри, які не потребують спеціальної заміни ──
+    for opt in options:
+        if not isinstance(opt, dict):
+            continue
+        oname = str(opt.get("OptionName") or opt.get("name_ua") or opt.get("name") or "").strip()
+        oval = str(opt.get("ValueName") or opt.get("value_ua") or opt.get("value") or "").strip()
+        if not (oname and oval):
+            continue
+            
+        oname_lower = oname.lower()
+        
+        # Ігноруємо ті, які будемо генерувати заново за стандартами Kasta
+        if oname_lower in ("сезон", "сезонність", "візерунок", "малюнок", "основний матеріал", "склад матеріалу"):
+            continue
+            
+        # Застібка та декорування обробляються окремо
+        if oname_lower in ("застібка", "застежка", "декорування"):
+            continue
+            
+        out.append({"name": oname, "value": oval})
+        
+    # ── 2. Сезонність ──
+    orig_season = ""
+    for opt in options:
+        oname_lower = str(opt.get("OptionName") or opt.get("name_ua") or "").strip().lower()
+        if oname_lower in ("сезон", "сезонність"):
+            orig_season = str(opt.get("ValueName") or opt.get("value_ua") or "").strip().lower()
+            break
+            
+    season_map = kasta_char_cfg.get("season_map", {})
+    mapped_season = season_map.get(orig_season, "Всесезон")
+    out.append({"name": "Сезонність", "value": mapped_season})
+    
+    # ── 3. Візерунок ──
+    orig_pattern = ""
+    for opt in options:
+        oname_lower = str(opt.get("OptionName") or opt.get("name_ua") or "").strip().lower()
+        if oname_lower in ("візерунок", "малюнок"):
+            orig_pattern = str(opt.get("ValueName") or opt.get("value_ua") or "").strip().lower()
+            break
+            
+    pattern_map = kasta_char_cfg.get("pattern_map", {})
+    mapped_pattern = ""
+    if orig_pattern in pattern_map:
+        mapped_pattern = pattern_map[orig_pattern]
+    elif orig_pattern:
+        mapped_pattern = "Малюнок"
+        
+    if not mapped_pattern:
+        pattern_keywords = kasta_char_cfg.get("pattern_keywords", {})
+        for kasta_val, keywords in pattern_keywords.items():
+            if any(kw in search_text for kw in keywords):
+                mapped_pattern = kasta_val
+                break
+                
+    if not mapped_pattern:
+        mapped_pattern = "Однотонний"
+        
+    out.append({"name": "Візерунок", "value": mapped_pattern})
+    
+    # ── 4. Матеріал ──
+    materials_found = set()
+    materials_list = kasta_char_cfg.get("materials_list", [])
+    
+    for opt in options:
+        oname_lower = str(opt.get("OptionName") or opt.get("name_ua") or "").strip().lower()
+        if oname_lower in ("основний матеріал", "склад матеріалу"):
+            val_text = str(opt.get("ValueName") or opt.get("value_ua") or "").strip().lower()
+            for mat in materials_list:
+                mat_lower = mat.lower()
+                # Спеціальна перевірка для вовни, щоб вона не збігалася з бавовною
+                if mat_lower == "вовна":
+                    clean_val = val_text.replace("бавовна", "").replace("cotton", "").replace("хлопок", "")
+                    if "вовна" in clean_val or "шерсть" in clean_val or "wool" in clean_val:
+                        materials_found.add("Вовна")
+                elif mat_lower in val_text:
+                    if mat_lower == "вовна" and "бавовна" in val_text:
+                        continue
+                    materials_found.add(mat)
+                elif mat_lower == "бавовна" and ("хлопок" in val_text or "cotton" in val_text):
+                    materials_found.add("Бавовна")
+                elif mat_lower == "еластан" and ("elastane" in val_text or "эластан" in val_text or "spandex" in val_text):
+                    materials_found.add("Еластан")
+                elif mat_lower == "поліестер" and ("polyester" in val_text or "полиэстер" in val_text):
+                    materials_found.add("Поліестер")
+                elif mat_lower == "віскоза" and ("viscose" in val_text or "вискоза" in val_text):
+                    materials_found.add("Віскоза")
+                elif mat_lower == "нейлон" and ("nylon" in val_text):
+                    materials_found.add("Нейлон")
+                    
+    if materials_found:
+        for mat in sorted(materials_found):
+            out.append({"name": "Матеріал", "value": mat})
+            
+    # ── 5. Декорування ──
+    orig_decor = ""
+    for opt in options:
+        oname_lower = str(opt.get("OptionName") or opt.get("name_ua") or "").strip().lower()
+        if oname_lower == "декорування":
+            orig_decor = str(opt.get("ValueName") or opt.get("value_ua") or "").strip().lower()
+            break
+    if orig_decor:
+        decor_map = kasta_char_cfg.get("decor_map", {})
+        if orig_decor in decor_map:
+            out.append({"name": "Декор", "value": decor_map[orig_decor]})
+            
+    # ── 6. Застібка ──
+    orig_fastener = ""
+    for opt in options:
+        oname_lower = str(opt.get("OptionName") or opt.get("name_ua") or "").strip().lower()
+        if oname_lower in ("застібка", "застежка"):
+            orig_fastener = str(opt.get("ValueName") or opt.get("value_ua") or "").strip().lower()
+            break
+    if orig_fastener:
+        fastener_map = kasta_char_cfg.get("fastener_map", {})
+        if orig_fastener in fastener_map:
+            out.append({"name": "Застібка", "value": fastener_map[orig_fastener]})
+            
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1316,6 +1461,7 @@ def build_kasta_feed_xml(
     shop_url: str, output: Path,
 ) -> dict:
     kasta_cfg = load_kasta_colors_config()
+    kasta_char_cfg = load_kasta_characteristics_config()
     cat_map = {c["categoryID"]: c for c in all_cats}
     by_parent: dict[int, list] = {}
     for c in all_cats:
@@ -1511,19 +1657,20 @@ def build_kasta_feed_xml(
 
             # ── ХАРАКТЕРИСТИКИ (стать НЕ дублюємо — вона вже у категорії) ──
             has_rozmir = False
-            for opt in p.get("options", []) or []:
-                if not isinstance(opt, dict):
-                    continue
-                oname = safe(opt.get("OptionName") or opt.get("name_ua") or opt.get("name") or "")
-                oval  = safe(opt.get("ValueName")  or opt.get("value_ua") or opt.get("value") or "")
-                if not (oname and oval):
-                    continue
+            kasta_options = standardize_kasta_characteristics(p, kasta_char_cfg)
+            for opt in kasta_options:
+                oname = opt["name"]
+                oval = opt["value"]
+                
+                # Додатково фільтруємо стать
                 if oname.strip().lower() in GENDER_PARAM_NAMES:
                     continue
-                if oname.strip().lower() in ("розмір", "размер"):
-                    has_rozmir = True
+                # Нормалізація кольору для Kasta
                 if oname.strip().lower() in ("колір", "цвет"):
                     oval = standardize_kasta_color(oval, kasta_cfg)
+                if oname.strip().lower() in ("розмір", "размер"):
+                    has_rozmir = True
+                    
                 param = SubElement(offer, "param")
                 param.set("name", oname)
                 param.text = oval
