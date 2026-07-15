@@ -909,6 +909,68 @@ SIZE_PARAM_NAMES = (
     "розмір шкарпеток", "довжина ступні", "длина ступни",
 )
 
+KASTA_KIDS_HEIGHTS = [
+    36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 62, 68, 74, 80, 86, 92, 98,
+    104, 110, 116, 122, 128, 134, 140, 146, 152, 158, 164, 170, 176, 182, 188
+]
+
+KASTA_KIDS_AGE_MAP = {
+    36: "0м.", 38: "0м.", 40: "0м.", 42: "0м.", 44: "0м.", 46: "0м.", 48: "0м.", 50: "0м.",
+    52: "1м.", 54: "1м.", 56: "1м.",
+    62: "3м.", 68: "6м.", 74: "9м.", 80: "12м.", 86: "18м.",
+    92: "2р.", 98: "3р.", 104: "4р.", 110: "5р.", 116: "6р.", 122: "7р.", 128: "8р.",
+    134: "9р.", 140: "10р.", 146: "11р.", 152: "12р.", 158: "13р.", 164: "14р.",
+    170: "15р.", 176: "16р.", 182: "17р.", 188: "18р."
+}
+
+
+def standardize_kasta_size(size_str: str) -> str:
+    """
+    Стандартизує дитячі розміри під сітку Kasta:
+      - Якщо є зріст, знаходить точний або найближчий МЕНШИЙ зріст.
+      - Якщо немає зросту, але є вік (місяці/роки) — мапить до стандартів Kasta,
+        а при діапазонах (наприклад "12-18 міс") обирає МЕНШИЙ зріз.
+    """
+    if not size_str:
+        return ""
+    val = size_str.strip().lower()
+    
+    # 1. Спроба витягти числовий зріст (наприклад, "152 см", "рост 76")
+    nums = [int(n) for n in re.findall(r'\d+', val)]
+    if nums:
+        # Для зросту/діапазону беремо менше число (округлення до меншого, наприклад "104-110" -> 104)
+        num = min(nums)
+        # Якщо число схоже на зріст дитини (від 30 до 200 см)
+        if 30 <= num <= 200:
+            if num in KASTA_KIDS_HEIGHTS:
+                return f"{num} см"
+                
+            # Правило неточного збігу: округлюємо до найближчого МЕНШОГО зросту
+            smaller_heights = [h for h in KASTA_KIDS_HEIGHTS if h <= num]
+            if smaller_heights:
+                best_h = max(smaller_heights)
+                return f"{best_h} см"
+            return "36 см"
+            
+    # 2. Якщо числового зросту немає або це вік (наприклад, "2 роки", "3м", "12-18м")
+    # Шукаємо місяці
+    if any(m_word in val for m_word in ["міс", "мес", "місяц", "месяц"]):
+        months = min(nums) if nums else 0
+        # Округлюємо місяці до найближчого меншого дозволеного Kasta: 0, 1, 3, 6, 9, 12, 18
+        allowed_months = [0, 1, 3, 6, 9, 12, 18]
+        smaller_m = [m for m in allowed_months if m <= months]
+        best_m = max(smaller_m) if smaller_m else 0
+        return f"{best_m}м."
+        
+    # Шукаємо роки
+    if any(y_word in val for y_word in ["р", "г", "років", "року", "лет", "y", "year"]):
+        years = min(nums) if nums else 0
+        if 2 <= years <= 18:
+            return f"{years}р."
+            
+    # Якщо нічого не підійшло, повертаємо як є
+    return size_str
+
 
 def size_value(product: dict):
     """Значення розміру товару + назва характеристики-джерела (за пріоритетом)."""
@@ -1670,6 +1732,7 @@ def build_kasta_feed_xml(
                     oval = standardize_kasta_color(oval, kasta_cfg)
                 if oname.strip().lower() in ("розмір", "размер"):
                     has_rozmir = True
+                    oval = standardize_kasta_size(oval)
                     
                 param = SubElement(offer, "param")
                 param.set("name", oname)
@@ -1683,7 +1746,7 @@ def build_kasta_feed_xml(
                 if sv:
                     pr = SubElement(offer, "param")
                     pr.set("name", "Розмір")
-                    pr.text = sv
+                    pr.text = standardize_kasta_size(sv)
 
             offers_el.append(offer)
             added += 1

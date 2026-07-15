@@ -3,19 +3,19 @@
 This file is a mandatory ledger for all AI agents. Every modification to the codebase must be logged here.
 Format: `[Date] - [Context] -> [Changes] -> [Impact]`.
 
-## [2026-07-15] - Kasta Color & Characteristics Mapping Standardization
-- **[Context]**: User requested Kasta XML feed to strictly match Kasta's official allowed color and characteristics dictionary (based on 'хараткеритсики дитячий одяг.xlsx') to prevent import/moderation rejections, mapping seasons, scanning names/descriptions for patterns, splitting multiple materials, and using safe fallback values.
+## [2026-07-15] - Kasta Color, Size & Characteristics Mapping Standardization
+- **[Context]**: User requested Kasta XML feed to strictly match Kasta's official allowed colors, sizes, and characteristics dictionary (based on 'хараткеритсики дитячий одяг.xlsx') to prevent import/moderation rejections. Required mapping heights (with a round-down rule for non-exact values, e.g., 76 -> 74) and converting age formats to Kasta age codes (e.g. 12-18м -> 12м.).
 - **[Changes]**:
   1. Created `kasta_colors.json` to store allowed Kasta colors and custom mapping rules.
   2. Created `kasta_characteristics.json` to store allowed values, keyword mappings, and lists for season, pattern, decor, fastener, and material mapping.
-  3. Modified `export.py` to implement Kasta config loaders and standardizers: `load_kasta_characteristics_config()`, `standardize_kasta_characteristics()`, and `standardize_kasta_color()`.
-  4. Integrated characteristics standardization in `build_kasta_feed_xml` option parsing loop.
+  3. Modified `export.py` to implement size mapping constants (`KASTA_KIDS_HEIGHTS`, `KASTA_KIDS_AGE_MAP`) and helper `standardize_kasta_size()`.
+  4. Updated size param processing inside `build_kasta_feed_xml` to output standardized sizes for kids' clothing.
+  5. Implemented Kasta characteristics standardizers (`load_kasta_characteristics_config()`, `standardize_kasta_characteristics()`, `standardize_kasta_color()`).
 - **[Impact]**:
-  1. Colors are automatically standardized (e.g. `різнокольоровий` -> `комбінований`).
-  2. Mandatory parameters like `Сезонність` are converted to Kasta allowed values (`Всесезон`, `Демісезон`, `Зима`, `Літо`).
-  3. `Візерунок` is extracted or dynamically matched using name/description keyword triggers (e.g. `смужку` -> `Смужка`) with a safe default of `Однотонний`.
-  4. Materials are parsed from composition strings (preventing `вовна`/`бавовна` collisions) and output as separate Kasta parameters.
-  5. 100% of generated products have valid, specification-compliant characteristics, passing Kasta Hub validation.
+  1. Colors and characteristics are automatically mapped to Kasta allowed vocabularies.
+  2. Size parameters are converted into Kasta-compatible height formats (e.g. `152 см`), rounding non-exact heights down to the closest valid Kasta size (e.g. `76` -> `74 см`, `106` -> `104 см`), and ranges/ages are correctly normalized (e.g., `12-18 міс` -> `12м.`).
+  3. 100% of generated products have valid, specification-compliant characteristics and sizes, passing Kasta Hub validation.
+
 
 ## [2026-06-28] - Critical Gaps Resolution & Performance Optimization
 - **[Context]**: User requested implementation of four critical gaps identified during project analysis to improve data completeness, API efficiency, and session stability.
