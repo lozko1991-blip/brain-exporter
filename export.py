@@ -40,6 +40,7 @@ OUTPUT_DIR = Path("output")
 CACHE_FILE = Path("products_cache.json")
 CATS_FILE  = Path("categories.json")
 FEEDS_FILE = Path("feeds.json")
+KASTA_COLORS_FILE = Path("kasta_colors.json")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # ══════════════════════════════════════════════════════════════════
@@ -964,6 +965,39 @@ def build_group_id(product: dict) -> str:
     return g if g and g != articul else ""
 
 
+def load_kasta_colors_config() -> dict:
+    """Завантажує конфігурацію кольорів для Kasta з kasta_colors.json."""
+    if KASTA_COLORS_FILE.exists():
+        try:
+            return json.loads(KASTA_COLORS_FILE.read_text(encoding="utf-8"))
+        except Exception as e:
+            log(f"   ⚠️ Не вдалося завантажити {KASTA_COLORS_FILE}: {e}")
+    return {"allowed_colors": [], "color_map": {}}
+
+
+def standardize_kasta_color(color_val: str, kasta_cfg: dict) -> str:
+    """Нормалізує колір під вимоги Kasta: мапить синоніми або повертає 'комбінований'."""
+    if not color_val:
+        return "комбінований"
+    val = str(color_val).strip().lower()
+    
+    # 1. Застосувати кастомний мапінг синонімів
+    cmap = kasta_cfg.get("color_map", {})
+    if val in cmap:
+        val = cmap[val]
+        
+    # 2. Перевірити чи дозволений колір
+    allowed = kasta_cfg.get("allowed_colors", [])
+    if allowed:
+        if val in allowed:
+            return val
+        # Якщо колір не знайдено в списку дозволених (або він занадто складний)
+        # повертаємо 'комбінований' як безпечний fallback
+        return "комбінований"
+        
+    return val
+
+
 # ══════════════════════════════════════════════════════════════════
 #  СТАТЬ ДИТИНИ (для поділу дитячого одягу) + ЧИСТКА ДЛЯ KASTA
 # ══════════════════════════════════════════════════════════════════
@@ -1281,6 +1315,7 @@ def build_kasta_feed_xml(
     products: list, all_cats: list, feed: dict,
     shop_url: str, output: Path,
 ) -> dict:
+    kasta_cfg = load_kasta_colors_config()
     cat_map = {c["categoryID"]: c for c in all_cats}
     by_parent: dict[int, list] = {}
     for c in all_cats:
@@ -1487,6 +1522,8 @@ def build_kasta_feed_xml(
                     continue
                 if oname.strip().lower() in ("розмір", "размер"):
                     has_rozmir = True
+                if oname.strip().lower() in ("колір", "цвет"):
+                    oval = standardize_kasta_color(oval, kasta_cfg)
                 param = SubElement(offer, "param")
                 param.set("name", oname)
                 param.text = oval

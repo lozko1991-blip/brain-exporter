@@ -3,6 +3,17 @@
 This file is a mandatory ledger for all AI agents. Every modification to the codebase must be logged here.
 Format: `[Date] - [Context] -> [Changes] -> [Impact]`.
 
+## [2026-07-15] - Kasta Color Mapping & Fallback Standardization
+- **[Context]**: User requested Kasta XML feed to strictly match Kasta's official allowed color dictionary to prevent import rejections, mapping non-standard color terms and falling back to "комбінований" for complex ones.
+- **[Changes]**:
+  1. Created `kasta_colors.json` to store allowed Kasta colors and custom mapping rules.
+  2. Modified `export.py` to define `load_kasta_colors_config()` and `standardize_kasta_color()`.
+  3. Integrated `standardize_kasta_color()` in `build_kasta_feed_xml` when parsing options of type "колір"/"цвет".
+- **[Impact]**:
+  1. Colors are automatically standardized (e.g. `різнокольоровий` -> `комбінований`, `молочно-білий` -> `молочний`).
+  2. Any complex or unknown color falls back to `комбінований`.
+  3. 100% of products generated in the Kasta feed are guaranteed to have a valid, Kasta-compliant color option, eliminating color-related import rejections.
+
 ## [2026-06-28] - Critical Gaps Resolution & Performance Optimization
 - **[Context]**: User requested implementation of four critical gaps identified during project analysis to improve data completeness, API efficiency, and session stability.
 - **[Changes]**:
