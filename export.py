@@ -942,15 +942,23 @@ def standardize_kasta_size(size_str: str) -> str:
         num = min(nums)
         # Якщо число схоже на зріст дитини (від 30 до 200 см)
         if 30 <= num <= 200:
-            if num in KASTA_KIDS_HEIGHTS:
-                return f"{num} см"
+            # ЗАПОБІЖНИК: Числа менше 80 (наприклад, 42, 44, 46) вважаються зростом в см
+            # тільки якщо рядок явно містить "см", "cm", "рост" або "зріст".
+            # Інакше це може бути звичайний розмір одягу (наприклад, дорослий 42).
+            is_height = True
+            if num < 80:
+                is_height = any(h_word in val for h_word in ["см", "cm", "рост", "зріст"])
                 
-            # Правило неточного збігу: округлюємо до найближчого МЕНШОГО зросту
-            smaller_heights = [h for h in KASTA_KIDS_HEIGHTS if h <= num]
-            if smaller_heights:
-                best_h = max(smaller_heights)
-                return f"{best_h} см"
-            return "36 см"
+            if is_height:
+                if num in KASTA_KIDS_HEIGHTS:
+                    return f"{num} см"
+                    
+                # Правило неточного збігу: округлюємо до найближчого МЕНШОГО зросту
+                smaller_heights = [h for h in KASTA_KIDS_HEIGHTS if h <= num]
+                if smaller_heights:
+                    best_h = max(smaller_heights)
+                    return f"{best_h} см"
+                return "36 см"
             
     # 2. Якщо числового зросту немає або це вік (наприклад, "2 роки", "3м", "12-18м")
     # Шукаємо місяці
