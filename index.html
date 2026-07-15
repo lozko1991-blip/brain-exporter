@@ -267,6 +267,18 @@
     </div>
   </div>
 
+  <!-- Блок статусу Actions -->
+  <div class="card" id="actions-status-card" style="display:none">
+    <div class="chead">
+      <div class="ctitle">🤖 Статус автоматичного оновлення на GitHub</div>
+    </div>
+    <div class="cbody">
+      <div id="runs-list" style="font-size:12px; display:flex; flex-direction:column; gap:10px">
+        ⏳ Завантаження статусу з GitHub...
+      </div>
+    </div>
+  </div>
+
   <!-- Постійні посилання -->
   <div class="card">
     <div class="chead">
@@ -712,17 +724,99 @@ function initToken() {
   const t = localStorage.getItem('gh_token');
   if (t) document.getElementById('gh-token').value = t;
   toggleGHMode();
+  loadWorkflowStatus();
 }
 function saveToken() {
   const t = document.getElementById('gh-token').value.trim();
   if (t) localStorage.setItem('gh_token', t);
   else localStorage.removeItem('gh_token');
   toggleGHMode();
+  loadWorkflowStatus();
 }
 function toggleGHMode() {
   const t = !!localStorage.getItem('gh_token');
   document.getElementById('gh-actions').style.display = t ? 'flex' : 'none';
   document.getElementById('manual-info').style.display = t ? 'none' : 'block';
+  const card = document.getElementById('actions-status-card');
+  if (card) card.style.display = t ? 'block' : 'none';
+}
+
+async function loadWorkflowStatus() {
+  const t = localStorage.getItem('gh_token');
+  const card = document.getElementById('actions-status-card');
+  if (!t) {
+    if (card) card.style.display = 'none';
+    return;
+  }
+  if (card) card.style.display = 'block';
+  
+  const listDiv = document.getElementById('runs-list');
+  if (!listDiv) return;
+  
+  const url = `https://api.github.com/repos/${GH.account}/${GH.repo}/actions/workflows/export.yml/runs?per_page=5`;
+  try {
+    const r = await fetch(url, { headers: getGHHeaders() });
+    if (!r.ok) {
+      listDiv.innerHTML = `<span style="color:var(--red)">⚠️ Не вдалося завантажити статуси оновлень. Перевірте токен.</span>`;
+      return;
+    }
+    const data = await r.json();
+    const runs = data.workflow_runs || [];
+    if (runs.length === 0) {
+      listDiv.innerHTML = `<span style="color:var(--t3)">Немає записів про запуски.</span>`;
+      return;
+    }
+    
+    let html = '';
+    runs.forEach(run => {
+      const mode = (run.triggering_actor && run.triggering_actor.login === 'github-actions[bot]') 
+        ? '🤖 Автоматично' 
+        : (run.event === 'workflow_dispatch' ? '👤 Ручний' : '⏰ За розкладом');
+        
+      let statusHtml = '';
+      if (run.status === 'completed') {
+        if (run.conclusion === 'success') {
+          statusHtml = `<span style="color:var(--green); font-weight:600">🟢 Успішно</span>`;
+        } else {
+          statusHtml = `<span style="color:var(--red); font-weight:600">🔴 Помилка</span>`;
+        }
+      } else {
+        statusHtml = `<span style="color:var(--amber); font-weight:600">⏳ Виконується</span>`;
+      }
+      
+      const date = new Date(run.created_at).toLocaleString('uk-UA', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+      });
+      
+      const inputs = run.display_title || '';
+      let modeText = 'Brain ➔ XML Export';
+      
+      // Спробуємо визначити quick/full з параметрів
+      const runNameLower = (run.name || '').toLowerCase();
+      if (runNameLower.includes('quick') || inputs.toLowerCase().includes('quick')) {
+        modeText += ' (⚡ Quick)';
+      } else if (runNameLower.includes('full') || inputs.toLowerCase().includes('full')) {
+        modeText += ' (🚀 Full)';
+      }
+      
+      html += `
+        <div style="padding:10px; border-radius:6px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); display:flex; justify-content:space-between; align-items:center">
+          <div>
+            <div style="font-weight:600; color:var(--t1)">#${run.run_number} — ${modeText}</div>
+            <div style="font-size:11px; color:var(--t3); margin-top:4px">${date} • ${mode}</div>
+          </div>
+          <div style="text-align:right">
+            <div>${statusHtml}</div>
+            <a href="${run.html_url}" target="_blank" style="font-size:11px; color:var(--violet); text-decoration:none; margin-top:4px; display:inline-block">Детальніше ➔</a>
+          </div>
+        </div>
+      `;
+    });
+    listDiv.innerHTML = html;
+  } catch (e) {
+    listDiv.innerHTML = `<span style="color:var(--red)">❌ Помилка: ${e.message}</span>`;
+  }
 }
 function getGHHeaders() {
   return {
@@ -781,6 +875,7 @@ async function triggerExport(mode) {
     });
     if (r.ok) {
       logDiv.innerHTML = `<span style="color:var(--green)">✅ Процес експорту (${mode}) успішно запущено на серверах GitHub!</span>`;
+      setTimeout(loadWorkflowStatus, 4000);
     } else {
       const e = await r.json();
       logDiv.innerHTML = `<span style="color:var(--red)">❌ Помилка запуску: ${e.message}</span>`;
