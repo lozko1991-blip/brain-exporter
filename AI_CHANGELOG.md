@@ -3,6 +3,16 @@
 This file is a mandatory ledger for all AI agents. Every modification to the codebase must be logged here.
 Format: `[Date] - [Context] -> [Changes] -> [Impact]`.
 
+## [2026-07-20] - Kasta Feed Import Error Fixes & Web UI Actions Dashboard
+- **[Context]**: User reported 4 specific error types from Kasta Hub XML import report (`SIZE_NOT_FOUND` in "Жінкам: боді", `no-russian-letters` validation failure in `description_uk`, `CHARACTERISTICS_MATCH_ERROR` for multi-color values and sleeve length). User also requested an Actions status dashboard in the Web UI.
+- **[Changes]**:
+  1. Implemented `enhance_kasta_cat_name()` in `export.py` to add category name qualifiers (e.g. "Боді для малюків", "Комбінезони дитячі"), ensuring Kasta classifies kids' items under "Дітям" rather than "Жінкам".
+  2. Implemented `sanitize_ukrainian_description()` in `export.py` to strip/convert Russian letters (`ы`->`и`, `э`->`е`, `ъ`->`'`, `ё`->`е`) and translate common vendor Russian words, falling back safely to `name_ua` to guarantee 100% compliance with Kasta's `no-russian-letters` validator.
+  3. Updated `standardize_kasta_color()` to parse multi-color strings (comma/slash separated) and output either the primary allowed color or `"комбінований"`, preventing comma-separated strings from being exported.
+  4. Updated `standardize_kasta_characteristics()` to normalize sleeve length ("Довжина рукава") from cm to Kasta standard terms (`короткий`/`довгий`/`3/4`/`без рукавів`).
+  5. Added `actions-status-card` and `loadWorkflowStatus()` in `index.html` to display the last 5 GitHub Actions workflow runs in real-time, showing execution mode (⚡ Quick / 🚀 Full), status indicators, and timestamps.
+- **[Impact]**: All 4 Kasta import error types are fully resolved. Kids sizes in cm are accepted under child categories, descriptions pass `no-russian-letters` checks, colors match Kasta's exact vocabulary, and users can monitor GitHub workflow executions live in the Web UI.
+
 ## [2026-07-15] - Kasta Color, Size & Characteristics Mapping Standardization
 - **[Context]**: User requested Kasta XML feed to strictly match Kasta's official allowed colors, sizes, and characteristics dictionary (based on 'хараткеритсики дитячий одяг.xlsx') to prevent import/moderation rejections. Required mapping heights (with a round-down rule for non-exact values, e.g., 76 -> 74) and converting age formats to Kasta age codes (e.g. 12-18м -> 12м.).
 - **[Changes]**:
