@@ -42,6 +42,7 @@ CATS_FILE  = Path("categories.json")
 FEEDS_FILE = Path("feeds.json")
 KASTA_COLORS_FILE = Path("kasta_colors.json")
 KASTA_CHARS_FILE = Path("kasta_characteristics.json")
+GENDER_PINS_FILE = Path("gender_pins.json")  # Закріплення статі товарів (стабільні категорії)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # ══════════════════════════════════════════════════════════════════
@@ -743,6 +744,38 @@ def load_cache(path: Path = CACHE_FILE) -> list:
     except Exception as e:
         log(f"⚠️ Помилка читання кешу {path.name}: {e}")
         return []
+
+
+def load_gender_pins(path: Path = GENDER_PINS_FILE) -> dict:
+    """
+    Завантажує файл закріплень статі товарів.
+    Повертає dict {str(productID): 'girl'|'boy'|'woman'|'man'|None}.
+    """
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        pins = data.get("pins", {})
+        log(f"📌 Пінів статі завантажено: {len(pins)} товарів з {path.name}")
+        return pins
+    except Exception as e:
+        log(f"⚠️ Помилка читання gender_pins {path.name}: {e}")
+        return {}
+
+
+def save_gender_pins(pins: dict, path: Path = GENDER_PINS_FILE):
+    """
+    Зберігає dict {str(productID): gender} у файл gender_pins.json.
+    """
+    path.write_text(
+        json.dumps({
+            "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "count": len(pins),
+            "pins": pins,
+        }, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    log(f"📌 Пінів статі збережено: {len(pins)} товарів → {path.name}")
 
 
 def pid_of(p: dict):
@@ -1689,17 +1722,29 @@ def build_kasta_feed_xml(
         if cid in cat_map:
             split_scope |= get_all_descendants(by_parent, cid)
 
+    # ── Завантажуємо закріплення статі ──
+    gender_pins = load_gender_pins()
+    new_pins: dict = {}  # нові визначення для збереження
+
     def gender_of(p):
-        """Стать товару, але ТІЛЬКИ якщо його категорія в split_scope; інакше None."""
+        """Стать товару, але ТІЛЬКИ якщо його категорія в split_scope; інакше None.
+        Спочатку перевіряє gender_pins.json — якщо є закріплення, використовує його.
+        Інакше визначає автоматично і додає до new_pins для збереження."""
         try:
             if int(p.get("categoryID")) in split_scope:
-                return detect_gender(p)
+                pid_key = str(pid_of(p))
+                if pid_key in gender_pins:
+                    return gender_pins[pid_key]  # закріплений результат
+                detected = detect_gender(p)
+                new_pins[pid_key] = detected  # запам'ятовуємо для збереження
+                return detected
         except Exception:
             pass
         return None
 
     log(f"📝 KASTA-фід '{feed['id']}': категорій={len(needed)}, "
-        f"націнка +{mp}% +{mf}грн, розбивка за статтю в {len(split_scope)} катег.")
+        f"націнка +{mp}% +{mf}грн, розбивка за статтю в {len(split_scope)} катег., "
+        f"закріплено статей={len(gender_pins)}")
 
     def in_scope(p) -> bool:
         cid = p.get("categoryID")
@@ -1914,6 +1959,13 @@ def build_kasta_feed_xml(
 
     output.write_text(final, encoding="utf-8")
     size_mb = output.stat().st_size / 1024 / 1024
+
+    # ── Зберігаємо нові закріплення статі (тільки нові/невідомі товари) ──
+    if new_pins:
+        merged_pins = {**new_pins, **gender_pins}  # gender_pins має пріоритет над new_pins
+        save_gender_pins(merged_pins)
+        log(f"   📌 Статей закріплено загалом: {len(merged_pins)} ({len(new_pins)} нових)")
+
     return {"offers": added, "skipped": skipped, "categories": n_cats, "size_mb": round(size_mb, 2)}
 
 

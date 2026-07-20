@@ -100,7 +100,9 @@ jobs:
       - name: ⬇️ Кеш із Release (resume base)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download "$RELEASE_TAG" -p products_cache.json -p categories.json --clobber || echo "Release ще немає — буде FULL fallback"
+        run: |
+          gh release download "$RELEASE_TAG" -p products_cache.json -p categories.json --clobber || echo "Release ще немає — буде FULL fallback"
+          gh release download "$RELEASE_TAG" -p gender_pins.json --clobber || echo "📌 gender_pins немає (перший запуск)"
 
       - name: 🚀 Quick export
         env:
@@ -114,16 +116,18 @@ jobs:
           SHOP_URL:     ${{ env.SHOP_URL }}
         run: python export.py
 
-      - name: 📤 Публікація в Release + commit categories.json
+      - name: 📤 Публікація в Release + commit categories.json + gender_pins.json
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+          gh release view "$RELEASE_TAG" > /dev/null 2>&1 || \
             gh release create "$RELEASE_TAG" --title "Latest feed" --notes "Авто-оновлення фідів"
           gh release upload "$RELEASE_TAG" output/*.xml products_cache.json categories.json --clobber
+          [ -f gender_pins.json ] && gh release upload "$RELEASE_TAG" gender_pins.json --clobber || true
           git config user.name "GitHub Actions Bot"; git config user.email "actions@github.com"
           git add -f categories.json || true
-          git diff --staged --quiet || git commit -m "🔄 categories [$(date +'%Y-%m-%d %H:%M')] quick"
+          git add -f gender_pins.json || true
+          git diff --staged --quiet || git commit -m "🔄 categories + gender_pins [$(date +'%Y-%m-%d %H:%M')] quick"
           git push || true
 
   # ════════════════════════════════════════════════════════════════
@@ -222,7 +226,9 @@ jobs:
       - name: ⬇️ Попередній кеш (база для незмінених зрізів)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download "$RELEASE_TAG" -p products_cache.json --clobber || echo "немає"
+        run: |
+          gh release download "$RELEASE_TAG" -p products_cache.json --clobber || echo "немає"
+          gh release download "$RELEASE_TAG" -p gender_pins.json --clobber || echo "📌 gender_pins немає (перший запуск)"
 
       - name: ⬇️ Усі shard-кеші
         uses: actions/download-artifact@v4
@@ -239,16 +245,18 @@ jobs:
           SHOP_URL:     ${{ env.SHOP_URL }}
         run: python export.py
 
-      - name: 📤 Публікація в Release + commit categories.json
+      - name: 📤 Публікація в Release + commit categories.json + gender_pins.json
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+          gh release view "$RELEASE_TAG" > /dev/null 2>&1 || \
             gh release create "$RELEASE_TAG" --title "Latest feed" --notes "Авто-оновлення фідів"
           gh release upload "$RELEASE_TAG" output/*.xml products_cache.json categories.json --clobber
+          [ -f gender_pins.json ] && gh release upload "$RELEASE_TAG" gender_pins.json --clobber || true
           git config user.name "GitHub Actions Bot"; git config user.email "actions@github.com"
           git add -f categories.json || true
-          git diff --staged --quiet || git commit -m "🔄 categories [$(date +'%Y-%m-%d %H:%M')] full"
+          git add -f gender_pins.json || true
+          git diff --staged --quiet || git commit -m "🔄 categories + gender_pins [$(date +'%Y-%m-%d %H:%M')] full"
           git push || true
 
       - uses: actions/upload-artifact@v4
