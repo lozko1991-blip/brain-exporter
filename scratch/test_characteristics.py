@@ -95,6 +95,8 @@ def test_char_mapping():
     # ── Тести розпізнавання статі з назви/опису ──
     assert export.detect_gender({"name": "Боді для дівчинки Sevim", "options": []}) == "girl"
     assert export.detect_gender({"name": "Кофта для хлопчика з капюшоном", "options": []}) == "boy"
+    assert export.detect_gender({"name_ru": "Боди для девочек POP FASHION", "options": []}) == "girl"
+    assert export.detect_gender({"name_ru": "Слинявчик для мальчиков Luvable", "options": []}) == "boy"
     
     print("\n[+] All characteristics, size, color, description, category name, and gender fallback tests PASSED successfully!")
 

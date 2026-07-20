@@ -1377,18 +1377,21 @@ def detect_gender(p: dict):
                 man = True
             # «унісекс» / «дитячі» / «детск» → не стать, лишаємо унісекс
 
-    # Фолбек: якщо стать не визначена з характеристик, перевіряємо назву та опис
+    # Фолбек: якщо стать не визначена з характеристик, перевіряємо назву та опис (укр. та рос.)
     if not (girl or boy or woman or man):
         name_ua = str(p.get("name") or p.get("name_ua") or "").lower()
         desc_ua = str(p.get("description") or p.get("brief_description") or "").lower()
-        full_text = f"{name_ua} {desc_ua}"
-        if any(w in full_text for w in ["для дівчаток", "для дівчинки", "для дівчат", "дівчинці", "дівчинка"]):
+        name_ru = str(p.get("name_ru") or "").lower()
+        desc_ru = str(p.get("description_ru") or p.get("brief_description_ru") or "").lower()
+        full_text = f"{name_ua} {desc_ua} {name_ru} {desc_ru}"
+        
+        if any(w in full_text for w in ["для дівчаток", "для дівчинки", "для дівчат", "дівчинці", "дівчинка", "для девочек", "для девочки", "девочке", "девочка"]):
             girl = True
-        elif any(w in full_text for w in ["для хлопчиків", "для хлопчика", "для хлопців", "хлопчику", "хлопчик"]):
+        elif any(w in full_text for w in ["для хлопчиків", "для хлопчика", "для хлопців", "хлопчику", "хлопчик", "для мальчиков", "для мальчика", "мальчику", "мальчик"]):
             boy = True
-        elif any(w in full_text for w in ["жіноч", "для жінок", "женск"]):
+        elif any(w in full_text for w in ["жіноч", "для жінок", "женск", "для женщин"]):
             woman = True
-        elif any(w in full_text for w in ["чоловіч", "для чоловіків", "мужск"]):
+        elif any(w in full_text for w in ["чоловіч", "для чоловіків", "мужск", "для мужчин"]):
             man = True
 
     # дитяча стать має пріоритет над дорослою
