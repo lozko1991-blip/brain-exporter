@@ -1057,16 +1057,109 @@ def standardize_kasta_color(color_val: str, kasta_cfg: dict) -> str:
     if val in cmap:
         val = cmap[val]
         
-    # 2. Перевірити чи дозволений колір
     allowed = kasta_cfg.get("allowed_colors", [])
+    
+    # 2. Обробка списків кольорів через кому/слеш (наприклад "блакитний,кремовий", "білий / синій")
+    if "," in val or "/" in val or " та " in val or " і " in val:
+        parts = [p.strip() for p in re.split(r'[,/]| та | і ', val) if p.strip()]
+        for p in parts:
+            mapped_p = cmap.get(p, p)
+            if allowed and mapped_p in allowed and mapped_p != "комбінований":
+                return mapped_p
+        return "комбінований"
+        
+    # 3. Перевірити чи дозволений колір
     if allowed:
         if val in allowed:
             return val
-        # Якщо колір не знайдено в списку дозволених (або він занадто складний)
-        # повертаємо 'комбінований' як безпечний fallback
+        for a in allowed:
+            if a in val and a != "комбінований":
+                return a
         return "комбінований"
         
-        return val
+    return val
+
+
+RU_UA_CHAR_MAP = {
+    'ы': 'и', 'Ы': 'И',
+    'э': 'е', 'Э': 'Е',
+    'ъ': "'", 'Ъ': "'",
+    'ё': 'е', 'Ё': 'Е',
+}
+
+RU_UA_WORD_MAP = {
+    "набор ": "набір ",
+    "набор": "набір",
+    "детской одежды": "дитячого одягу",
+    "детской": "дитячої",
+    "одежды": "одягу",
+    "с рисунком": "з малюнком",
+    "животных": "тварин",
+    "для девочек": "для дівчаток",
+    "для мальчиков": "для хлопчиків",
+    "с надписями": "з написами",
+    "голубой": "блакитний",
+    "розовый": "рожевий",
+    "белый": "білий",
+    "красный": "червоний",
+    "зеленый": "зелений",
+    "выполнен": "виконаний",
+    "высококачественных": "високоякісних",
+    "материалов": "матеріалів",
+    "качества": "якості",
+    "мягкое": "м'яке",
+    "мягкую": "м'яку",
+    "комбинезон": "комбінезон",
+    "одеяло": "ковдра",
+    "полотенце": "рушник",
+    "пижама": "піжама",
+    "ночная сорочка": "нічна сорочка",
+    "футболка": "футболка",
+    "шорты": "шорти",
+}
+
+
+def sanitize_ukrainian_description(text: str, fallback_title: str = "") -> str:
+    """Очищує опис від російських слів та літер (ы, э, ъ, ё) для проходження модерації Kasta."""
+    if not text:
+        return fallback_title or "Дитячий одяг високої якості."
+    
+    t = text
+    t_lower = t.lower()
+    for ru_w, ua_w in RU_UA_WORD_MAP.items():
+        if ru_w in t_lower:
+            pattern = re.compile(re.escape(ru_w), re.IGNORECASE)
+            t = pattern.sub(ua_w, t)
+            
+    for ru_c, ua_c in RU_UA_CHAR_MAP.items():
+        t = t.replace(ru_c, ua_c)
+        
+    if re.search(r'[ыэъёЫЭЪЁ]', t):
+        return fallback_title or "Дитячий одяг високої якості."
+        
+    return t.strip()
+
+
+def enhance_kasta_cat_name(cat_id: int, orig_name: str, cat_map: dict) -> str:
+    """Додає уточнення 'для малюків' / 'дитячі' до назв категорій для запобігання помилки жіночого одягу."""
+    name = orig_name.strip()
+    name_lower = name.lower()
+    if any(k in name_lower for k in ["дитяч", "малюк", "малят", "для немовлят"]):
+        return name
+    
+    curr_id = cat_id
+    is_kids = False
+    while curr_id and curr_id in cat_map:
+        if curr_id in (7456, 8138, 7731):
+            is_kids = True
+            break
+        curr_id = cat_map[curr_id].get("parentID")
+        
+    if is_kids:
+        if name_lower in ("боді", "чоловічки", "слинявчики", "спальний конверт", "крижма", "покривальця та ковдри"):
+            return f"{name} для малюків"
+        return f"{name} дитячі"
+    return name
 
 
 def load_kasta_characteristics_config() -> dict:
@@ -1110,6 +1203,25 @@ def standardize_kasta_characteristics(p: dict, kasta_char_cfg: dict) -> list[dic
         # Застібка та декорування обробляються окремо
         if oname_lower in ("застібка", "застежка", "декорування"):
             continue
+            
+        # Обробка Довжини рукава під стандарти Kasta (без см)
+        if oname_lower in ("довжина рукава", "длина рукава"):
+            val_l = oval.lower()
+            if any(w in val_l for w in ["без рукав", "безрукав"]):
+                oval = "без рукавів"
+            elif any(w in val_l for w in ["3/4", "три чверті"]):
+                oval = "3/4"
+            elif "коротк" in val_l:
+                oval = "короткий"
+            elif "довг" in val_l:
+                oval = "довгий"
+            else:
+                nums = [int(n) for n in re.findall(r'\d+', oval)]
+                if nums:
+                    oval = "короткий" if nums[0] <= 15 else "довгий"
+                else:
+                    continue
+            oname = "Довжина рукава"
             
         out.append({"name": oname, "value": oval})
         
@@ -1616,7 +1728,7 @@ def build_kasta_feed_xml(
         el.set("id", cidx(cat["categoryID"]))
         if cat.get("parentID", 1) != 1:
             el.set("parentId", cidx(cat["parentID"]))
-        el.text = safe(cat["name"])
+        el.text = safe(enhance_kasta_cat_name(cat["categoryID"], cat["name"], cat_map))
         n_cats += 1
 
     # ── синтетичні дочірні категорії за статтю ──
@@ -1625,7 +1737,7 @@ def build_kasta_feed_xml(
         el = SubElement(cats_el, "category")
         el.set("id", cidx(orig_cid) + GENDER_CID_SUFFIX[g])
         el.set("parentId", cidx(orig_cid))
-        base_name = safe(cat_map.get(orig_cid, {}).get("name", ""))
+        base_name = safe(enhance_kasta_cat_name(orig_cid, cat_map.get(orig_cid, {}).get("name", ""), cat_map))
         el.text = f"{base_name} {suffixes[g]}".strip()
         n_cats += 1
 
@@ -1715,8 +1827,9 @@ def build_kasta_feed_xml(
             if nm_ru:
                 SubElement(offer, "name_ru").text = nm_ru
 
-            # опис — обидві мови, без HTML, ≤5000 символів
+            # опис — обидві мови, без HTML, ≤5000 символів, очищений від рос. літер
             desc_ua = clean_html(p.get("description") or p.get("brief_description") or "")
+            desc_ua = sanitize_ukrainian_description(desc_ua, nm_ua)
             if desc_ua:
                 SubElement(offer, "description_ua").text = desc_ua
             desc_ru = clean_html(p.get("description_ru") or p.get("brief_description_ru") or "")
