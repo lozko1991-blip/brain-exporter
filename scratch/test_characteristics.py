@@ -92,7 +92,11 @@ def test_char_mapping():
     enhanced = export.enhance_kasta_cat_name(8145, "Боді", cat_map)
     assert enhanced == "Боді для малюків"
     
-    print("\n[+] All characteristics, size, color, description, and category name tests PASSED successfully!")
+    # ── Тести розпізнавання статі з назви/опису ──
+    assert export.detect_gender({"name": "Боді для дівчинки Sevim", "options": []}) == "girl"
+    assert export.detect_gender({"name": "Кофта для хлопчика з капюшоном", "options": []}) == "boy"
+    
+    print("\n[+] All characteristics, size, color, description, category name, and gender fallback tests PASSED successfully!")
 
 if __name__ == "__main__":
     test_char_mapping()
