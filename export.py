@@ -1050,6 +1050,11 @@ def get_kasta_size_params(size_str: str) -> list:
         return []
     val = size_str.strip()
 
+    # Прибирання спецсимволів (залишки артефактів парсингу, напр: '",44-44)' → '44-44')
+    cleaned_val = re.sub(r'^[^\w\d]+|[^\w\dсм]+$', '', val, flags=re.IGNORECASE).strip()
+    if cleaned_val:
+        val = cleaned_val
+
     # ── 0. Дубльований діапазон VALUE-VALUE → одне значення ──
     dedup = re.match(r'^(.+?)\s*-\s*\1$', val, re.IGNORECASE)
     if dedup:
