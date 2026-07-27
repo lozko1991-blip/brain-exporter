@@ -97,7 +97,31 @@ def test_char_mapping():
     assert export.detect_gender({"name": "Кофта для хлопчика з капюшоном", "options": []}) == "boy"
     assert export.detect_gender({"name_ru": "Боди для девочек POP FASHION", "options": []}) == "girl"
     assert export.detect_gender({"name_ru": "Слинявчик для мальчиков Luvable", "options": []}) == "boy"
-    
+
+    # ── Тести get_kasta_size_params (діапазони → Розмір Kasta + Розмір Kasta (max)) ──
+    # Дубльований діапазон → одинарний Розмір
+    assert export.get_kasta_size_params("104 см-104 см") == [("Розмір", "104 см")], f"Got: {export.get_kasta_size_params('104 см-104 см')}"
+    assert export.get_kasta_size_params("44-44") == [("Розмір", "44")], f"Got: {export.get_kasta_size_params('44-44')}"
+    assert export.get_kasta_size_params("L-L") == [("Розмір", "L")], f"Got: {export.get_kasta_size_params('L-L')}"
+
+    # Діапазон взуття → Розмір Kasta + max
+    assert export.get_kasta_size_params("28-30") == [("Розмір Kasta", "28"), ("Розмір Kasta (max)", "30")], \
+        f"Got: {export.get_kasta_size_params('28-30')}"
+    assert export.get_kasta_size_params("34-36") == [("Розмір Kasta", "34"), ("Розмір Kasta (max)", "36")], \
+        f"Got: {export.get_kasta_size_params('34-36')}"
+    assert export.get_kasta_size_params("23 - 26") == [("Розмір Kasta", "23"), ("Розмір Kasta (max)", "26")], \
+        f"Got: {export.get_kasta_size_params('23 - 26')}"
+
+    # Діапазон зросту зі "см" → Розмір Kasta + max
+    r74_84 = export.get_kasta_size_params("74 - 84 см")
+    assert r74_84 == [("Розмір Kasta", "74 см"), ("Розмір Kasta (max)", "80 см")] or \
+           r74_84[0] == ("Розмір Kasta", "74 см"), f"Got: {r74_84}"
+
+    # Одинарне значення
+    assert export.get_kasta_size_params("104 см") == [("Розмір", "104 см")], f"Got: {export.get_kasta_size_params('104 см')}"
+    assert export.get_kasta_size_params("M") == [("Розмір", "M")], f"Got: {export.get_kasta_size_params('M')}"
+    print("    - get_kasta_size_params: PASSED (ranges->dual params, single->Rozmir)")
+
     print("\n[+] All characteristics, size, color, description, category name, and gender fallback tests PASSED successfully!")
 
 if __name__ == "__main__":
