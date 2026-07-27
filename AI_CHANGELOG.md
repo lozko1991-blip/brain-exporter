@@ -3,6 +3,16 @@
 This file is a mandatory ledger for all AI agents. Every modification to the codebase must be logged here.
 Format: `[Date] - [Context] -> [Changes] -> [Impact]`.
 
+## [2026-07-27] - Kasta Size Range Fix: Розмір Kasta + Розмір Kasta (max)
+- **[Context]**: User re-uploaded Kasta XML feed and received `SIZE_NOT_FOUND` + `CHARACTERISTICS_NOT_ENOUGH` errors. Analysis of the live `kasta.xml` (19.6 MB, 7194 offers) revealed 8 range-format sizes still in the feed: `28-30`, `29-32`, `31-33`, `34-36`, `36 - 40`, `23 - 26`, `74 - 84 см`, `10-11 р`. Kasta spec requires ranges to be split into two separate `<param>` tags: `Розмір Kasta` (min) and `Розмір Kasta (max)` (max).
+- **[Changes]**:
+  1. Rewrote `standardize_kasta_size()` in `export.py` to handle: (a) deduplicated ranges `VALUE-VALUE` → single value; (b) height ranges `74 - 84 см` → `74 см` fallback; (c) shoe ranges `28-30` → `28`; (d) year ranges `10-11 р` → `10р.`.
+  2. Added new `get_kasta_size_params(size_str)` function that returns `list[(param_name, param_value)]`: single value → `[("Розмір", "104 см")]`; different-value range → `[("Розмір Kasta", "74 см"), ("Розмір Kasta (max)", "84 см")]`.
+  3. Updated `build_kasta_feed_xml()` option loop to use `get_kasta_size_params()` with `continue` after emitting size params, so ranges produce TWO `<param>` elements instead of one.
+  4. Updated the fallback `if not has_rozmir:` block to also use `get_kasta_size_params()`.
+  5. Updated `scratch/test_characteristics.py` with 10 new assertions covering all range formats.
+- **[Impact]**: Shoe size ranges (`28-30` → `Розмір Kasta: 28` + `Розмір Kasta (max): 30`), height ranges (`74-84 см` → two params), and all duplicate ranges (`44-44` → single `44`) are now correctly exported. Eliminates `SIZE_NOT_FOUND` errors for range-type sizes.
+
 ## [2026-07-20] - Kasta Feed Import Error Fixes & Web UI Actions Dashboard
 - **[Context]**: User reported 4 specific error types from Kasta Hub XML import report (`SIZE_NOT_FOUND` in "Жінкам: боді", `no-russian-letters` validation failure in `description_uk`, `CHARACTERISTICS_MATCH_ERROR` for multi-color values and sleeve length). User also requested an Actions status dashboard in the Web UI.
 - **[Changes]**:
