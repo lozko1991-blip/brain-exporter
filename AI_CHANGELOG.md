@@ -3,6 +3,14 @@
 This file is a mandatory ledger for all AI agents. Every modification to the codebase must be logged here.
 Format: `[Date] - [Context] -> [Changes] -> [Impact]`.
 
+## [2026-07-30] - Revert Kasta Size Range Split (Single Param)
+- **[Context]**: User reported that splitting sizes like `50-56 см` into `Розмір Kasta` and `Розмір Kasta (max)` is incorrect for baby clothing, as Kasta expects a single `Розмір` value representing the range (e.g. `50 см-56 см`).
+- **[Changes]**:
+  1. Removed `get_kasta_size_params()` from `export.py`.
+  2. Reverted `build_kasta_feed_xml()` to use a single `<param name="Розмір">`.
+  3. Modified `standardize_kasta_size()` so it PRESERVES ranges instead of picking the lower bound. Examples: `74 - 84 см` → `74 см-80 см`, `28-30` → `28-30`.
+- **[Impact]**: Baby clothing and shoe sizes will now output their full ranges in a single `Розмір` parameter, aligning with Kasta's size grid for these categories.
+
 ## [2026-07-27] - Kasta Size Range Fix: Розмір Kasta + Розмір Kasta (max)
 - **[Context]**: User re-uploaded Kasta XML feed and received `SIZE_NOT_FOUND` + `CHARACTERISTICS_NOT_ENOUGH` errors. Analysis of the live `kasta.xml` (19.6 MB, 7194 offers) revealed 8 range-format sizes still in the feed: `28-30`, `29-32`, `31-33`, `34-36`, `36 - 40`, `23 - 26`, `74 - 84 см`, `10-11 р`. Kasta spec requires ranges to be split into two separate `<param>` tags: `Розмір Kasta` (min) and `Розмір Kasta (max)` (max).
 - **[Changes]**:
