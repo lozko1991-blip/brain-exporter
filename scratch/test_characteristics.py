@@ -98,29 +98,26 @@ def test_char_mapping():
     assert export.detect_gender({"name_ru": "Боди для девочек POP FASHION", "options": []}) == "girl"
     assert export.detect_gender({"name_ru": "Слинявчик для мальчиков Luvable", "options": []}) == "boy"
 
-    # ── Тести get_kasta_size_params (діапазони → Розмір Kasta + Розмір Kasta (max)) ──
-    # Дубльований діапазон → одинарний Розмір
-    assert export.get_kasta_size_params("104 см-104 см") == [("Розмір", "104 см")], f"Got: {export.get_kasta_size_params('104 см-104 см')}"
-    assert export.get_kasta_size_params("44-44") == [("Розмір", "44")], f"Got: {export.get_kasta_size_params('44-44')}"
-    assert export.get_kasta_size_params("L-L") == [("Розмір", "L")], f"Got: {export.get_kasta_size_params('L-L')}"
+    # ── Тести збереження діапазонів ──
+    assert export.standardize_kasta_size("104 см-104 см") == "104 см", f"Got: {export.standardize_kasta_size('104 см-104 см')}"
+    assert export.standardize_kasta_size("44-44") == "44", f"Got: {export.standardize_kasta_size('44-44')}"
+    assert export.standardize_kasta_size("L-L") == "L", f"Got: {export.standardize_kasta_size('L-L')}"
 
-    # Діапазон взуття → Розмір Kasta + max
-    assert export.get_kasta_size_params("28-30") == [("Розмір Kasta", "28"), ("Розмір Kasta (max)", "30")], \
-        f"Got: {export.get_kasta_size_params('28-30')}"
-    assert export.get_kasta_size_params("34-36") == [("Розмір Kasta", "34"), ("Розмір Kasta (max)", "36")], \
-        f"Got: {export.get_kasta_size_params('34-36')}"
-    assert export.get_kasta_size_params("23 - 26") == [("Розмір Kasta", "23"), ("Розмір Kasta (max)", "26")], \
-        f"Got: {export.get_kasta_size_params('23 - 26')}"
+    # Діапазон взуття 
+    assert export.standardize_kasta_size("28-30") == "28-30", f"Got: {export.standardize_kasta_size('28-30')}"
+    assert export.standardize_kasta_size("23 - 26") == "23-26", f"Got: {export.standardize_kasta_size('23 - 26')}"
 
-    # Діапазон зросту зі "см" → Розмір Kasta + max
-    r74_84 = export.get_kasta_size_params("74 - 84 см")
-    assert r74_84 == [("Розмір Kasta", "74 см"), ("Розмір Kasta (max)", "80 см")] or \
-           r74_84[0] == ("Розмір Kasta", "74 см"), f"Got: {r74_84}"
+    # Діапазон зросту зі "см"
+    assert export.standardize_kasta_size("74 - 84 см") == "74 см-80 см", f"Got: {export.standardize_kasta_size('74 - 84 см')}"
+    assert export.standardize_kasta_size("50-56 см") == "50 см-56 см", f"Got: {export.standardize_kasta_size('50-56 см')}"
+
+    # Діапазон віку
+    assert export.standardize_kasta_size("10-11 р") == "10-11р.", f"Got: {export.standardize_kasta_size('10-11 р')}"
 
     # Одинарне значення
-    assert export.get_kasta_size_params("104 см") == [("Розмір", "104 см")], f"Got: {export.get_kasta_size_params('104 см')}"
-    assert export.get_kasta_size_params("M") == [("Розмір", "M")], f"Got: {export.get_kasta_size_params('M')}"
-    print("    - get_kasta_size_params: PASSED (ranges->dual params, single->Rozmir)")
+    assert export.standardize_kasta_size("104 см") == "104 см", f"Got: {export.standardize_kasta_size('104 см')}"
+    assert export.standardize_kasta_size("M") == "M", f"Got: {export.standardize_kasta_size('M')}"
+    print("    - standardize_kasta_size ranges: PASSED")
 
     print("\n[+] All characteristics, size, color, description, category name, and gender fallback tests PASSED successfully!")
 

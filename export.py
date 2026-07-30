@@ -980,16 +980,23 @@ def standardize_kasta_size(size_str: str) -> str:
     val_lower = val.lower()
     nums = [int(n) for n in re.findall(r'\d+', val_lower)]
 
-    # ── 1. Діапазон зросту зі "см": "74 - 84 см" → "74 см" ──
-    height_range = re.match(r'^(\d+)\s*-\s*\d+\s*(?:см|cm)', val_lower)
+    # ── 1. Діапазон зросту зі "см": "74 - 84 см" → "74 см-84 см" ──
+    height_range = re.match(r'^(\d+)\s*-\s*(\d+)\s*(?:см|cm)', val_lower)
     if height_range:
-        num = int(height_range.group(1))
-        if num in KASTA_KIDS_HEIGHTS:
-            return f"{num} см"
-        smaller_heights = [h for h in KASTA_KIDS_HEIGHTS if h <= num]
-        if smaller_heights:
-            return f"{max(smaller_heights)} см"
-        return f"{num} см"
+        lo = int(height_range.group(1))
+        hi = int(height_range.group(2))
+        
+        def snap_h(num):
+            if num in KASTA_KIDS_HEIGHTS:
+                return num
+            smaller = [h for h in KASTA_KIDS_HEIGHTS if h <= num]
+            if smaller:
+                return max(smaller)
+            return num
+            
+        lo_h = snap_h(lo)
+        hi_h = snap_h(hi)
+        return f"{lo_h} см-{hi_h} см"
 
     # ── 2. Пошук числового зросту (наприклад, "152 см", "рост 76") ──
     if nums:
@@ -1016,81 +1023,33 @@ def standardize_kasta_size(size_str: str) -> str:
         best_m = max(smaller_m) if smaller_m else 0
         return f"{best_m}м."
 
-    # ── 4. Вік у роках (діапазон "10-11 р" → "10р.") ──
+    # ── 4. Вік у роках (діапазон "10-11 р" → "10-11р." або "10р.") ──
+    # Якщо діапазон років
+    yr_range = re.match(r'^(\d+)\s*-\s*(\d+)\s*(?:р\.?|рік|рок|лет|year)', val_lower)
+    if yr_range:
+        lo_y, hi_y = int(yr_range.group(1)), int(yr_range.group(2))
+        return f"{lo_y}-{hi_y}р."
+        
     if any(y_word in val_lower for y_word in ["р.", "р ", "рік", "рок", "лет", "year"]) or \
-       (nums and re.search(r'^\d{1,2}(?:\s*-\s*\d{1,2})?\s*р\.?$', val_lower)):
+       (nums and re.search(r'^\d{1,2}\s*р\.?$', val_lower)):
         years = min(nums) if nums else 0
         if 1 <= years <= 18:
             return f"{years}р."
 
-    # ── 5. Діапазон взуття / числовий без "см": "28-30" → "28", "34-36" → "34" ──
-    shoe_range = re.match(r'^(\d+)\s*-\s*\d+$', val.strip())
+    # ── 5. Діапазон взуття / числовий без "см": "28-30" → "28-30" ──
+    shoe_range = re.match(r'^(\d+)\s*-\s*(\d+)$', val.strip())
     if shoe_range:
-        return shoe_range.group(1)  # повертаємо менший розмір взуття
+        return f"{shoe_range.group(1)}-{shoe_range.group(2)}"
 
-    # Діапазон із пробілами: "23 - 26" → "23"
-    shoe_range_spaced = re.match(r'^(\d+)\s+-\s+\d+$', val.strip())
+    # Діапазон із пробілами: "23 - 26" → "23-26"
+    shoe_range_spaced = re.match(r'^(\d+)\s+-\s+(\d+)$', val.strip())
     if shoe_range_spaced:
-        return shoe_range_spaced.group(1)
+        return f"{shoe_range_spaced.group(1)}-{shoe_range_spaced.group(2)}"
 
     # ── 6. Якщо нічого не підійшло, повертаємо як є ──
     return val
 
 
-def get_kasta_size_params(size_str: str) -> list:
-    """
-    Повертає список [(param_name, param_value)] для тегу розміру у Kasta XML.
-
-    За офіційним стандартом Kasta:
-      - Одинарний розмір → [("Розмір", "104 см")]
-      - Діапазон (різні значення) → [("Розмір Kasta", "74 см"), ("Розмір Kasta (max)", "84 см")]
-      - Те саме для взуття: "28-30" → [("Розмір Kasta", "28"), ("Розмір Kasta (max)", "30")]
-    """
-    if not size_str:
-        return []
-    val = size_str.strip()
-
-    # Прибирання спецсимволів (залишки артефактів парсингу, напр: '",44-44)' → '44-44')
-    cleaned_val = re.sub(r'^[^\w\d]+|[^\w\dсм]+$', '', val, flags=re.IGNORECASE).strip()
-    if cleaned_val:
-        val = cleaned_val
-
-    # ── 0. Дубльований діапазон VALUE-VALUE → одне значення ──
-    dedup = re.match(r'^(.+?)\s*-\s*\1$', val, re.IGNORECASE)
-    if dedup:
-        single = standardize_kasta_size(dedup.group(1).strip())
-        return [("Розмір", single)] if single else []
-
-    # ── 1. Діапазон зросту зі "см": "74 - 84 см" або "74 см-84 см" ──
-    height_range = re.match(
-        r'^(\d+)\s*(?:см|cm)?\s*-\s*(\d+)\s*(?:см|cm)', val, re.IGNORECASE
-    )
-    if height_range:
-        lo, hi = int(height_range.group(1)), int(height_range.group(2))
-        if lo != hi:
-            def snap_h(n):
-                smaller = [h for h in KASTA_KIDS_HEIGHTS if h <= n]
-                return max(smaller) if smaller else n
-            return [
-                ("Розмір Kasta",       f"{snap_h(lo)} см"),
-                ("Розмір Kasta (max)", f"{snap_h(hi)} см"),
-            ]
-
-    # ── 2. Числовий діапазон без "см": "28-30", "23 - 26" → два розміри взуття ──
-    # (не стосується вікових "10-11 р" — вони мають букву "р" після числа)
-    num_range = re.match(r'^(\d+)\s*-\s*(\d+)$', val) or \
-                re.match(r'^(\d+)\s+-\s+(\d+)$', val)
-    if num_range:
-        lo_s, hi_s = num_range.group(1), num_range.group(2)
-        if lo_s != hi_s:
-            return [
-                ("Розмір Kasta",       lo_s),
-                ("Розмір Kasta (max)", hi_s),
-            ]
-
-    # ── 3. Одинарне значення (вік, буква, зріст) ──
-    single = standardize_kasta_size(val)
-    return [("Розмір", single)] if single else []
 
 
 def size_value(product: dict):
@@ -1992,16 +1951,13 @@ def build_kasta_feed_xml(
                 if oname.strip().lower() in GENDER_PARAM_NAMES:
                     continue
 
-                # ── Розмір: може генерувати 1 або 2 param-теги (Розмір Kasta + max) ──
+                # ── Розмір ──
                 if oname.strip().lower() in ("розмір", "размер"):
                     has_rozmir = True
-                    for pname, pval in get_kasta_size_params(oval):
-                        if pval:
-                            pr = SubElement(offer, "param")
-                            pr.set("name", pname)
-                            pr.text = pval
-                    continue  # size вже додано, пропускаємо загальний шлях
-
+                    oval = standardize_kasta_size(oval)
+                    if not oval:
+                        continue
+                        
                 # Нормалізація кольору для Kasta
                 if oname.strip().lower() in ("колір", "цвет"):
                     oval = standardize_kasta_color(oval, kasta_cfg)
@@ -2016,11 +1972,11 @@ def build_kasta_feed_xml(
             if not has_rozmir:
                 sv, _src = size_value(p)
                 if sv:
-                    for pname, pval in get_kasta_size_params(sv):
-                        if pval:
-                            pr = SubElement(offer, "param")
-                            pr.set("name", pname)
-                            pr.text = pval
+                    std_sz = standardize_kasta_size(sv)
+                    if std_sz:
+                        pr = SubElement(offer, "param")
+                        pr.set("name", "Розмір")
+                        pr.text = std_sz
 
             offers_el.append(offer)
             added += 1
