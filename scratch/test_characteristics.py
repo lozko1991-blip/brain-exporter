@@ -23,7 +23,7 @@ def test_char_mapping():
         ("106 см", "104 см"),         # Округлення до меншого
         ("12 років", "12р."),         # Роки
         ("3 місяці", "3м."),          # Місяці
-        ("12-18 міс", "12м."),        # Діапазон місяців
+        ("12-18 міс", "12-18м."),        # Діапазон місяців
         ("6 років", "6р."),           # Роки
         ("рост 76", "74 см"),         # Текст + число
         
@@ -113,6 +113,8 @@ def test_char_mapping():
 
     # Діапазон віку
     assert export.standardize_kasta_size("10-11 р") == "10-11р.", f"Got: {export.standardize_kasta_size('10-11 р')}"
+    assert export.standardize_kasta_size("3-6 міс") == "3-6м.", f"Got: {export.standardize_kasta_size('3-6 міс')}"
+    assert export.standardize_kasta_size("3 міс") == "3м.", f"Got: {export.standardize_kasta_size('3 міс')}"
 
     # Одинарне значення
     assert export.standardize_kasta_size("104 см") == "104 см", f"Got: {export.standardize_kasta_size('104 см')}"

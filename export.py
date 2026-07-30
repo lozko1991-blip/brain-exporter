@@ -934,10 +934,11 @@ def vendor_name(p: dict) -> str:
 
 
 # Характеристики, що несуть РОЗМІР (для групування і для KASTA <param name="Розмір">).
-# Порядок = пріоритет: спершу явний «Розмір», далі дитячий «Зріст», потім взуття/шкарпетки.
+# Порядок = пріоритет: спершу явний «Розмір», далі дитячий «Зріст», потім вік, потім взуття/шкарпетки.
 SIZE_PARAM_NAMES = (
     "розмір", "размер",
     "зріст", "рост",
+    "вік", "возраст",
     "розмір взуття", "размер обуви",
     "розмір шкарпеток", "довжина ступні", "длина ступни",
 )
@@ -1017,6 +1018,10 @@ def standardize_kasta_size(size_str: str) -> str:
 
     # ── 3. Вік у місяцях ──
     if any(m_word in val_lower for m_word in ["міс", "мес", "місяц", "месяц"]):
+        m_range = re.match(r'^(\d+)\s*-\s*(\d+)\s*(?:міс|мес|м)', val_lower)
+        if m_range:
+            return f"{m_range.group(1)}-{m_range.group(2)}м."
+            
         months = min(nums) if nums else 0
         allowed_months = [0, 1, 3, 6, 9, 12, 18]
         smaller_m = [m for m in allowed_months if m <= months]
