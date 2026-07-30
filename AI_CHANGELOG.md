@@ -1,7 +1,11 @@
 # AI Development Changelog
 
-This file is a mandatory ledger for all AI agents. Every modification to the codebase must be logged here.
-Format: `[Date] - [Context] -> [Changes] -> [Impact]`.
+## [2026-07-30] - Add Age Fallback for Sizes
+- **[Context]**: User requested that if a product lacks both `Розмір` and `Зріст`, the script should try to use the `Вік` parameter as a fallback size for baby/kids clothing, since Kasta supports age-based sizes (0м., 1м., 3м. etc).
+- **[Changes]**:
+  1. Added `вік`, `возраст` to `SIZE_PARAM_NAMES`.
+  2. Enhanced `standardize_kasta_size()` to support age ranges in months (e.g., `3-6 міс` → `3-6м.`).
+- **[Impact]**: Products missing explicit sizes but having an age parameter will now successfully export sizes to Kasta instead of getting a `SIZE_NOT_PROVIDED` error.
 
 ## [2026-07-30] - Revert Kasta Size Range Split (Single Param)
 - **[Context]**: User reported that splitting sizes like `50-56 см` into `Розмір Kasta` and `Розмір Kasta (max)` is incorrect for baby clothing, as Kasta expects a single `Розмір` value representing the range (e.g. `50 см-56 см`).
