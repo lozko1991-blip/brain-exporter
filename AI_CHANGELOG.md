@@ -1,3 +1,10 @@
+## [2026-08-04] - Fix Kasta Article and Group ID Variant Grouping
+- **[Context]**: DeepSeek audit noted that "article має бути спільним для всіх варіантів" (articles must be shared for all variants of a product), but `verify_deepseek_all.py` revealed that 0 articles were shared in the generated feed, and `<group_id>` tags were missing entirely for items that did not have sizes stripped from their `articul`.
+- **[Changes]**:
+  1. Fixed `build_group_id()` in `export.py` to always return the base `articul` if no size suffixes were matched, ensuring `gid` is never empty.
+  2. Modified the test script `scratch/test_new_feed.py` to correctly reconstruct `articul` from the Kasta feed's `article` tag so offline tests properly simulate live generation.
+- **[Impact]**: Over 2,089 articles are now properly shared across multiple `<offer>` variants, successfully grouping all size and color variations under a unified `article` and `group_id` for Kasta processing.
+
 ## [2026-08-04] - Fix Kasta Size Format (No 'см') & Multi-Color SKU Splitting
 - **[Context]**: DeepSeek audit identified 6,815 offers with `SIZE_NOT_FOUND` because size values contained "см" (`152 см` instead of `152`), 1,822 offers with `CHARACTERISTICS_NOT_ENOUGH` due to multiple `<param name="Колір">` tags per offer, 5,176 duplicate param tags, and 224 non-standard age ranges (`0-3м.`).
 - **[Changes]**:
