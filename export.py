@@ -1103,6 +1103,11 @@ def build_group_id(product: dict) -> str:
     # 5) прибрати здвоєні роздільники, що лишились
     g = re.sub(r'[.\-_/]{2,}', '-', g).strip('-._/ ')
 
+    # 6) Пісочниця за категоріями: додаємо ID категорії, щоб уникнути хибного злиття
+    cat_id = product.get("categoryID")
+    if g and cat_id:
+        g = f"{g}-cat{cat_id}"
+
     return g if g else ""
 
 
