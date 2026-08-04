@@ -1103,7 +1103,7 @@ def build_group_id(product: dict) -> str:
     # 5) прибрати здвоєні роздільники, що лишились
     g = re.sub(r'[.\-_/]{2,}', '-', g).strip('-._/ ')
 
-    return g if g and g != articul else ""
+    return g if g else ""
 
 
 def load_kasta_colors_config() -> dict:
@@ -2001,7 +2001,7 @@ def build_kasta_feed_xml(
                 if vn:
                     SubElement(offer, "vendor").text = safe(vn)
 
-                articul = p.get("articul") or p.get("product_code", "")
+                articul = build_group_id(p) or p.get("articul") or p.get("product_code", "")
                 if articul:
                     SubElement(offer, "article").text = safe(str(articul))
 
