@@ -1,3 +1,8 @@
+## [2026-08-04] - Add Category ID Sandbox to Article Grouping
+- **[Context]**: User requested protection against "false merging" where the vendor might accidentally assign the same base articul to two completely different products (e.g., a jacket and socks), causing them to group together on Kasta and show wrong prices/photos.
+- **[Changes]**: Modified `build_group_id()` in `export.py` to append the product's `categoryID` to the base `articul` (e.g., `1001` -> `1001-cat8324`).
+- **[Impact]**: Products are now safely "sandboxed" by category. Even if two different products share the exact same Brain articul, they will have different Category IDs and therefore different Kasta `<article>` tags, strictly preventing them from merging into the same Kasta product card.
+
 ## [2026-08-04] - Fix Kasta Article and Group ID Variant Grouping
 - **[Context]**: DeepSeek audit noted that "article має бути спільним для всіх варіантів" (articles must be shared for all variants of a product), but `verify_deepseek_all.py` revealed that 0 articles were shared in the generated feed, and `<group_id>` tags were missing entirely for items that did not have sizes stripped from their `articul`.
 - **[Changes]**:
