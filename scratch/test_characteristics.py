@@ -18,19 +18,19 @@ def test_char_mapping():
     # ── Тестові кейси для розмірів ──
     size_tests = [
         # (Вхідний розмір, Очікуваний вихід)
-        ("152 см", "152 см"),         # Точний збіг зросту
-        ("76 см", "74 см"),           # Округлення до меншого
-        ("106 см", "104 см"),         # Округлення до меншого
+        ("152 см", "152"),            # Точний збіг зросту без см
+        ("76 см", "74"),              # Округлення до меншого
+        ("106 см", "104"),            # Округлення до меншого
         ("12 років", "12р."),         # Роки
         ("3 місяці", "3м."),          # Місяці
-        ("12-18 міс", "12-18м."),        # Діапазон місяців
+        ("12-18 міс", "12м."),        # Діапазон місяців -> початковий місяць
         ("6 років", "6р."),           # Роки
-        ("рост 76", "74 см"),         # Текст + число
+        ("рост 76", "74"),            # Текст + число
         
         # ── Тести запобіжника для дорослих розмірів ──
-        ("42", "42"),                 # Дорослий розмір 42 (має залишитися 42, не стати "42 см")
-        ("42 см", "42 см"),           # Дитячий зріст 42 см (має залишитися "42 см")
-        ("104", "104 см")             # Дитячий зріст 104 без "см" (>= 80, стає "104 см")
+        ("42", "42"),                 # Дорослий розмір 42 (без см)
+        ("42 см", "42"),              # Дитячий зріст 42 см (без см)
+        ("104", "104")                # Дитячий зріст 104 без см
     ]
     
     print("\n--- RUNNING SIZE STANDARDIZATION TESTS ---")
@@ -99,7 +99,7 @@ def test_char_mapping():
     assert export.detect_gender({"name_ru": "Слинявчик для мальчиков Luvable", "options": []}) == "boy"
 
     # ── Тести збереження діапазонів ──
-    assert export.standardize_kasta_size("104 см-104 см") == "104 см", f"Got: {export.standardize_kasta_size('104 см-104 см')}"
+    assert export.standardize_kasta_size("104 см-104 см") == "104", f"Got: {export.standardize_kasta_size('104 см-104 см')}"
     assert export.standardize_kasta_size("44-44") == "44", f"Got: {export.standardize_kasta_size('44-44')}"
     assert export.standardize_kasta_size("L-L") == "L", f"Got: {export.standardize_kasta_size('L-L')}"
 
@@ -108,16 +108,16 @@ def test_char_mapping():
     assert export.standardize_kasta_size("23 - 26") == "23-26", f"Got: {export.standardize_kasta_size('23 - 26')}"
 
     # Діапазон зросту зі "см"
-    assert export.standardize_kasta_size("74 - 84 см") == "74 см-80 см", f"Got: {export.standardize_kasta_size('74 - 84 см')}"
-    assert export.standardize_kasta_size("50-56 см") == "50 см-56 см", f"Got: {export.standardize_kasta_size('50-56 см')}"
+    assert export.standardize_kasta_size("74 - 84 см") == "74-80", f"Got: {export.standardize_kasta_size('74 - 84 см')}"
+    assert export.standardize_kasta_size("50-56 см") == "50-56", f"Got: {export.standardize_kasta_size('50-56 см')}"
 
     # Діапазон віку
-    assert export.standardize_kasta_size("10-11 р") == "10-11р.", f"Got: {export.standardize_kasta_size('10-11 р')}"
-    assert export.standardize_kasta_size("3-6 міс") == "3-6м.", f"Got: {export.standardize_kasta_size('3-6 міс')}"
+    assert export.standardize_kasta_size("10-11 р") == "10р.", f"Got: {export.standardize_kasta_size('10-11 р')}"
+    assert export.standardize_kasta_size("3-6 міс") == "3м.", f"Got: {export.standardize_kasta_size('3-6 міс')}"
     assert export.standardize_kasta_size("3 міс") == "3м.", f"Got: {export.standardize_kasta_size('3 міс')}"
 
     # Одинарне значення
-    assert export.standardize_kasta_size("104 см") == "104 см", f"Got: {export.standardize_kasta_size('104 см')}"
+    assert export.standardize_kasta_size("104 см") == "104", f"Got: {export.standardize_kasta_size('104 см')}"
     assert export.standardize_kasta_size("M") == "M", f"Got: {export.standardize_kasta_size('M')}"
     print("    - standardize_kasta_size ranges: PASSED")
 

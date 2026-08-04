@@ -981,8 +981,8 @@ def standardize_kasta_size(size_str: str) -> str:
     val_lower = val.lower()
     nums = [int(n) for n in re.findall(r'\d+', val_lower)]
 
-    # ── 1. Діапазон зросту зі "см": "74 - 84 см" → "74 см-84 см" ──
-    height_range = re.match(r'^(\d+)\s*-\s*(\d+)\s*(?:см|cm)', val_lower)
+    # ── 1. Діапазон зросту зі "см": "74 - 84 см" → "74-80" ──
+    height_range = re.match(r'^(\d+)\s*(?:см|cm)?\s*-\s*(\d+)\s*(?:см|cm)', val_lower)
     if height_range:
         lo = int(height_range.group(1))
         hi = int(height_range.group(2))
@@ -997,7 +997,7 @@ def standardize_kasta_size(size_str: str) -> str:
             
         lo_h = snap_h(lo)
         hi_h = snap_h(hi)
-        return f"{lo_h} см-{hi_h} см"
+        return str(lo_h) if lo_h == hi_h else f"{lo_h}-{hi_h}"
 
     # ── 2. Пошук числового зросту (наприклад, "152 см", "рост 76") ──
     if nums:
@@ -1009,33 +1009,23 @@ def standardize_kasta_size(size_str: str) -> str:
 
             if is_height:
                 if num in KASTA_KIDS_HEIGHTS:
-                    return f"{num} см"
+                    return str(num)
                 smaller_heights = [h for h in KASTA_KIDS_HEIGHTS if h <= num]
                 if smaller_heights:
                     best_h = max(smaller_heights)
-                    return f"{best_h} см"
-                return "36 см"
+                    return str(best_h)
+                return "36"
 
-    # ── 3. Вік у місяцях ──
+    # ── 3. Вік у місяцях (мапимо діапазони "0-3 міс" → "0м.", "3-6 міс" → "3м.") ──
     if any(m_word in val_lower for m_word in ["міс", "мес", "місяц", "месяц"]):
-        m_range = re.match(r'^(\d+)\s*-\s*(\d+)\s*(?:міс|мес|м)', val_lower)
-        if m_range:
-            return f"{m_range.group(1)}-{m_range.group(2)}м."
-            
         months = min(nums) if nums else 0
         allowed_months = [0, 1, 3, 6, 9, 12, 18]
         smaller_m = [m for m in allowed_months if m <= months]
         best_m = max(smaller_m) if smaller_m else 0
         return f"{best_m}м."
 
-    # ── 4. Вік у роках (діапазон "10-11 р" → "10-11р." або "10р.") ──
-    # Якщо діапазон років
-    yr_range = re.match(r'^(\d+)\s*-\s*(\d+)\s*(?:р\.?|рік|рок|лет|year)', val_lower)
-    if yr_range:
-        lo_y, hi_y = int(yr_range.group(1)), int(yr_range.group(2))
-        return f"{lo_y}-{hi_y}р."
-        
-    if any(y_word in val_lower for y_word in ["р.", "р ", "рік", "рок", "лет", "year"]) or \
+    # ── 4. Вік у роках (діапазон "10-11 р" → "10р.") ──
+    if any(y_word in val_lower for y_word in ["р.", "р ", " р", "рік", "рок", "лет", "year"]) or \
        (nums and re.search(r'^\d{1,2}\s*р\.?$', val_lower)):
         years = min(nums) if nums else 0
         if 1 <= years <= 18:
@@ -1044,15 +1034,18 @@ def standardize_kasta_size(size_str: str) -> str:
     # ── 5. Діапазон взуття / числовий без "см": "28-30" → "28-30" ──
     shoe_range = re.match(r'^(\d+)\s*-\s*(\d+)$', val.strip())
     if shoe_range:
-        return f"{shoe_range.group(1)}-{shoe_range.group(2)}"
+        s1, s2 = shoe_range.group(1), shoe_range.group(2)
+        return s1 if s1 == s2 else f"{s1}-{s2}"
 
     # Діапазон із пробілами: "23 - 26" → "23-26"
     shoe_range_spaced = re.match(r'^(\d+)\s+-\s+(\d+)$', val.strip())
     if shoe_range_spaced:
-        return f"{shoe_range_spaced.group(1)}-{shoe_range_spaced.group(2)}"
+        s1, s2 = shoe_range_spaced.group(1), shoe_range_spaced.group(2)
+        return s1 if s1 == s2 else f"{s1}-{s2}"
 
-    # ── 6. Якщо нічого не підійшло, повертаємо як є ──
-    return val
+    # ── 6. Прибирання залишків "см" з числових розмірів (напр. "42 см" → "42") ──
+    cleaned_val = re.sub(r'\s*(?:см|cm)\b', '', val, flags=re.IGNORECASE).strip()
+    return cleaned_val
 
 
 
@@ -1901,90 +1894,155 @@ def build_kasta_feed_xml(
             if rec > sell:
                 SubElement(offer, "old_price").text = str(int(rec))
 
-            # ── ФОТО (мінімум 1, максимум 20) ──
-            n_pics = 0
+            # ── Перевірка фото (мінімум 1, максимум 20) ──
             pics = p.get("pictures", [])
+            has_valid_pic = False
             if isinstance(pics, list) and pics:
-                for pic in sorted(pics, key=lambda x: x.get("priority", 99) if isinstance(x, dict) else 99):
-                    if n_pics >= 20:
-                        break
-                    if not isinstance(pic, dict):
-                        continue
-                    url = pic.get("full_image") or pic.get("large_image") or pic.get("medium_image")
-                    if url and "no-photo" not in url:
-                        SubElement(offer, "picture").text = url; n_pics += 1
-            if n_pics == 0:
+                for pic in pics:
+                    if isinstance(pic, dict):
+                        url = pic.get("full_image") or pic.get("large_image") or pic.get("medium_image")
+                        if url and "no-photo" not in url:
+                            has_valid_pic = True; break
+            if not has_valid_pic:
                 for key in ["full_image", "large_image", "medium_image", "small_image"]:
                     if p.get(key) and "no-photo" not in str(p.get(key)):
-                        SubElement(offer, "picture").text = p[key]; n_pics += 1; break
-            if n_pics == 0:
+                        has_valid_pic = True; break
+            if not has_valid_pic:
                 no_photo += 1; skipped += 1; continue  # без фото KASTA відхилить
 
-            vn = strip_stopwords(vendor_name(p))
-            if vn:
-                SubElement(offer, "vendor").text = safe(vn)
-
-            articul = p.get("articul") or p.get("product_code", "")
-            if articul:
-                SubElement(offer, "article").text = safe(str(articul))
-
-            # назва — обидві мови (KASTA воліє name_ua; name_ru — бонус)
-            if nm_ua:
-                SubElement(offer, "name_ua").text = nm_ua
-            if nm_ru:
-                SubElement(offer, "name_ru").text = nm_ru
-
-            # опис — обидві мови, без HTML, ≤5000 символів, очищений від рос. літер
-            desc_ua = clean_html(p.get("description") or p.get("brief_description") or "")
-            desc_ua = sanitize_ukrainian_description(desc_ua, nm_ua)
-            if desc_ua:
-                SubElement(offer, "description_ua").text = desc_ua
-            desc_ru = clean_html(p.get("description_ru") or p.get("brief_description_ru") or "")
-            if desc_ru:
-                SubElement(offer, "description_ru").text = desc_ru
-
-            SubElement(offer, "stock_quantity").text = str(qty)
-
-            # ── ХАРАКТЕРИСТИКИ (стать НЕ дублюємо — вона вже у категорії) ──
+            # ── 1. Збираємо опції товару (колір, розмір, інші) ──
+            colors_list = []
+            other_params = []  # list of (param_name, param_value)
             has_rozmir = False
+
             kasta_options = standardize_kasta_characteristics(p, kasta_char_cfg)
             for opt in kasta_options:
                 oname = opt["name"]
                 oval = opt["value"]
+                oname_lower = oname.strip().lower()
 
-                # Додатково фільтруємо стать
-                if oname.strip().lower() in GENDER_PARAM_NAMES:
+                if oname_lower in GENDER_PARAM_NAMES:
                     continue
 
-                # ── Розмір ──
-                if oname.strip().lower() in ("розмір", "размер"):
+                if oname_lower in ("колір", "цвет"):
+                    std_c = standardize_kasta_color(oval, kasta_cfg)
+                    if std_c and std_c not in colors_list:
+                        colors_list.append(std_c)
+                elif oname_lower in ("розмір", "размер"):
                     has_rozmir = True
-                    oval = standardize_kasta_size(oval)
-                    if not oval:
-                        continue
-                        
-                # Нормалізація кольору для Kasta
-                if oname.strip().lower() in ("колір", "цвет"):
-                    oval = standardize_kasta_color(oval, kasta_cfg)
+                    std_sz = standardize_kasta_size(oval)
+                    if std_sz:
+                        other_params.append(("Розмір", std_sz))
+                else:
+                    other_params.append((oname, oval))
 
-                param = SubElement(offer, "param")
-                param.set("name", oname)
-                param.text = oval
-
-            # ── РОЗМІР для KASTA: якщо явного «Розмір» немає (дитячий одяг має
-            # «Зріст», взуття — «Розмір взуття») — додаємо <param name="Розмір">
-            # з відповідного джерела, інакше KASTA дасть SIZE_NOT_PROVIDED.
+            # ── 2. Якщо явного «Розмір» немає, шукаємо у фолбеках (Зріст / Вік / Розмір взуття) ──
             if not has_rozmir:
                 sv, _src = size_value(p)
                 if sv:
                     std_sz = standardize_kasta_size(sv)
                     if std_sz:
-                        pr = SubElement(offer, "param")
-                        pr.set("name", "Розмір")
-                        pr.text = std_sz
+                        other_params.append(("Розмір", std_sz))
 
-            offers_el.append(offer)
-            added += 1
+            # ── 3. Формуємо варіанти кольорів ──
+            # Якщо кольори є — створюємо по 1 offer на кожен колір. Якщо немає — 1 offer без кольору.
+            color_variants = colors_list if colors_list else [None]
+
+            for c_idx, col_val in enumerate(color_variants):
+                offer = Element("offer")
+                
+                # Унікальний ID: якщо 1 колір — стандартний, якщо кілька — із суфіксом _col0, _col1...
+                if len(color_variants) > 1:
+                    offer.set("id", f"{oid(pid)}_col{c_idx}")
+                else:
+                    offer.set("id", oid(pid))
+                    
+                offer.set("available", "true")
+
+                gid = build_group_id(p)
+                if gid:
+                    offer.set("group_id", f"{po}{gid}")
+
+                SubElement(offer, "currencyId").text = "UAH"
+
+                orig_cid = int(p["categoryID"])
+                g = gender_of(p)
+                cat_id_out = cidx(orig_cid) + (GENDER_CID_SUFFIX[g] if g else "")
+                SubElement(offer, "categoryId").text = cat_id_out
+
+                # Ціни
+                sell = round(bp * (1 + mp / 100) + mf, 0)
+                SubElement(offer, "price").text = str(int(sell))
+                try:
+                    rec = float(str(p.get("retail_price_uah")
+                                    or p.get("recommendable_price") or 0).replace(",", "."))
+                except Exception:
+                    rec = 0
+                if rec > sell:
+                    SubElement(offer, "old_price").text = str(int(rec))
+
+                # Зображення (до 20)
+                n_pics = 0
+                if isinstance(pics, list) and pics:
+                    for pic in sorted(pics, key=lambda x: x.get("priority", 99) if isinstance(x, dict) else 99):
+                        if n_pics >= 20:
+                            break
+                        if not isinstance(pic, dict):
+                            continue
+                        url = pic.get("full_image") or pic.get("large_image") or pic.get("medium_image")
+                        if url and "no-photo" not in url:
+                            SubElement(offer, "picture").text = url; n_pics += 1
+                if n_pics == 0:
+                    for key in ["full_image", "large_image", "medium_image", "small_image"]:
+                        if p.get(key) and "no-photo" not in str(p.get(key)):
+                            SubElement(offer, "picture").text = p[key]; n_pics += 1; break
+
+                vn = strip_stopwords(vendor_name(p))
+                if vn:
+                    SubElement(offer, "vendor").text = safe(vn)
+
+                articul = p.get("articul") or p.get("product_code", "")
+                if articul:
+                    SubElement(offer, "article").text = safe(str(articul))
+
+                if nm_ua:
+                    SubElement(offer, "name_ua").text = nm_ua
+                if nm_ru:
+                    SubElement(offer, "name_ru").text = nm_ru
+
+                desc_ua = clean_html(p.get("description") or p.get("brief_description") or "")
+                desc_ua = sanitize_ukrainian_description(desc_ua, nm_ua)
+                if desc_ua:
+                    SubElement(offer, "description_ua").text = desc_ua
+                desc_ru = clean_html(p.get("description_ru") or p.get("brief_description_ru") or "")
+                if desc_ru:
+                    SubElement(offer, "description_ru").text = desc_ru
+
+                SubElement(offer, "stock_quantity").text = str(qty)
+
+                # ── ХАРАКТЕРИСТИКИ з дедублікацією назв тегів у межах одного offer ──
+                seen_params = set()
+
+                # 1) Колір (якщо є для даного варіанту)
+                if col_val:
+                    pr = SubElement(offer, "param")
+                    pr.set("name", "Колір")
+                    pr.text = col_val
+                    seen_params.add("колір")
+
+                # 2) Інші параметри (Розмір, Матеріал тощо)
+                for pname, pval in other_params:
+                    pname_lower = pname.strip().lower()
+                    if pname_lower in seen_params:
+                        continue  # уникаємо дублювання однакових param в одному offer
+                    seen_params.add(pname_lower)
+                    
+                    pr = SubElement(offer, "param")
+                    pr.set("name", pname)
+                    pr.text = pval
+
+                offers_el.append(offer)
+                added += 1
 
         except Exception as e:
             errors += 1

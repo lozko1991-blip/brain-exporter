@@ -1,4 +1,10 @@
-# AI Development Changelog
+## [2026-08-04] - Fix Kasta Size Format (No 'см') & Multi-Color SKU Splitting
+- **[Context]**: DeepSeek audit identified 6,815 offers with `SIZE_NOT_FOUND` because size values contained "см" (`152 см` instead of `152`), 1,822 offers with `CHARACTERISTICS_NOT_ENOUGH` due to multiple `<param name="Колір">` tags per offer, 5,176 duplicate param tags, and 224 non-standard age ranges (`0-3м.`).
+- **[Changes]**:
+  1. Updated `standardize_kasta_size()` in `export.py` to strip "см" from numeric sizes (e.g. `152 см` → `152`, `62 см-68 см` → `62-68`), and mapped age ranges to catalog age standards (e.g. `0-3м.` → `0м.`, `12-18м.` → `12м.`).
+  2. Refactored `build_kasta_feed_xml()` in `export.py` to split multi-color products into separate `<offer>` elements with unique IDs (`{id}_col0`, `{id}_col1`, etc.), shared `group_id`, consistent `article`, and exactly 1 color param per offer.
+  3. Added parameter deduplication per offer to prevent duplicate `<param>` tags.
+- **[Impact]**: Tested on 7,213 products (expanded to 9,504 single-color SKU offers). Reduced multi-color offers from 1,822 to 0, sizes with 'см' from 6,815 to 0, and duplicate params per offer from 5,176 to 0.
 
 ## [2026-07-30] - Add Age Fallback for Sizes
 - **[Context]**: User requested that if a product lacks both `Розмір` and `Зріст`, the script should try to use the `Вік` parameter as a fallback size for baby/kids clothing, since Kasta supports age-based sizes (0м., 1м., 3м. etc).
