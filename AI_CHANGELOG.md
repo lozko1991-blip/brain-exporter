@@ -1,3 +1,8 @@
+## [2026-08-05] - Add Duplicate Feed kasta2.xml
+- **[Context]**: User requested creating a duplicate Kasta feed (`kasta2.xml`) to allow testing/uploading a separate URL on Kasta platform.
+- **[Changes]**: Added `"id": "kasta2"` feed block to `feeds.json` copying category mappings and configurations of `"kasta"`.
+- **[Impact]**: Exporter will now generate both `kasta.xml` and `kasta2.xml` during workflow runs.
+
 ## [2026-08-04] - Add Category ID Sandbox to Article Grouping
 - **[Context]**: User requested protection against "false merging" where the vendor might accidentally assign the same base articul to two completely different products (e.g., a jacket and socks), causing them to group together on Kasta and show wrong prices/photos.
 - **[Changes]**: Modified `build_group_id()` in `export.py` to append the product's `categoryID` to the base `articul` (e.g., `1001` -> `1001-cat8324`).
