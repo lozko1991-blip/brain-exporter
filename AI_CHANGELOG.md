@@ -1,3 +1,10 @@
+## [2026-08-07] - Fix Kasta Size Parameter Duplication (152-152) & Mandatory Size Fallbacks
+- **[Context]**: Kasta import error log reported 8,397 `SIZE_NOT_FOUND` errors with doubled sizes (e.g., `152-152`, `110-116-110-116`) and 8,392 `CHARACTERISTICS_NOT_ENOUGH` errors.
+- **[Changes]**:
+  1. Updated `export.py` XML offer generator so that all size-bearing parameters (`Розмір`, `Зріст`, `Вік`, etc. in `SIZE_PARAM_NAMES`) map to a single `<param name="Розмір">` tag per offer, preventing duplicate `<param name="Зріст">` and `<param name="Розмір">` tags from being combined into `152-152` by Kasta.
+  2. Added a fallback to emit `<param name="Розмір">one size</param>` for accessories and one-size items to satisfy Kasta's mandatory size requirement.
+- **[Impact]**: Audit of 9,504 offers confirmed 0 duplicated size ranges (`152-152`), 0 offers with multiple size/height tags, and 0 offers missing mandatory size parameters.
+
 ## [2026-08-05] - Add Duplicate Feed kasta2.xml
 - **[Context]**: User requested creating a duplicate Kasta feed (`kasta2.xml`) to allow testing/uploading a separate URL on Kasta platform.
 - **[Changes]**: Added `"id": "kasta2"` feed block to `feeds.json` copying category mappings and configurations of `"kasta"`.

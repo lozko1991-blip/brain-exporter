@@ -1933,11 +1933,12 @@ def build_kasta_feed_xml(
                     std_c = standardize_kasta_color(oval, kasta_cfg)
                     if std_c and std_c not in colors_list:
                         colors_list.append(std_c)
-                elif oname_lower in ("розмір", "размер"):
-                    has_rozmir = True
-                    std_sz = standardize_kasta_size(oval)
-                    if std_sz:
-                        other_params.append(("Розмір", std_sz))
+                elif oname_lower in SIZE_PARAM_NAMES:
+                    if not has_rozmir:
+                        std_sz = standardize_kasta_size(oval)
+                        if std_sz:
+                            other_params.append(("Розмір", std_sz))
+                            has_rozmir = True
                 else:
                     other_params.append((oname, oval))
 
@@ -1948,6 +1949,10 @@ def build_kasta_feed_xml(
                     std_sz = standardize_kasta_size(sv)
                     if std_sz:
                         other_params.append(("Розмір", std_sz))
+                        has_rozmir = True
+            if not has_rozmir:
+                other_params.append(("Розмір", "one size"))
+                has_rozmir = True
 
             # ── 3. Формуємо варіанти кольорів ──
             # Якщо кольори є — створюємо по 1 offer на кожен колір. Якщо немає — 1 offer без кольору.
