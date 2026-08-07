@@ -1296,8 +1296,15 @@ def standardize_kasta_characteristics(p: dict, kasta_char_cfg: dict) -> list[dic
                     oval = "короткий" if nums[0] <= 15 else "довгий"
                 else:
                     continue
-            oname = "Довжина рукава"
-            
+        # Обробка Типу (комплектації) під стандарти Kasta
+        if oname_lower in ("тип", "вид"):
+            type_map = kasta_char_cfg.get("type_map", {})
+            val_l = oval.lower().strip()
+            if val_l in type_map:
+                oval = type_map[val_l]
+            elif val_l in ("зимова", "демісезонна", "літня", "всесезонна", "легка"):
+                continue  # ці значення належать до Сезонності, а не Типу
+
         out.append({"name": oname, "value": oval})
         
     # ── 2. Сезонність ──
