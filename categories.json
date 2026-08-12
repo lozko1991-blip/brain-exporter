@@ -1,6 +1,6 @@
 {
-  "generated": "2026-08-11 19:03",
-  "total": 2797,
+  "generated": "2026-08-12 07:26",
+  "total": 2798,
   "categories": [
     {
       "categoryID": 1181,
@@ -4306,6 +4306,12 @@
           "categoryID": 9648,
           "parentID": 7442,
           "name": "Комплект вбудованої техніки",
+          "children": []
+        },
+        {
+          "categoryID": 10462,
+          "parentID": 7442,
+          "name": "Тепловий насос",
           "children": []
         }
       ]
