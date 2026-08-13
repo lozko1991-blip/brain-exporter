@@ -700,10 +700,10 @@ function updateConfig() {
     `Приклад: товар з закупкою <b>1000 грн</b> → ціна продажу у фіді "${f.name}" = <b>${ex} грн</b> ` +
     `(1000 +${f.markup_percent}% +${f.markup_fixed}грн)` + kastaHint;
 
-  // посилання — фіди віддаються через GitHub Release (тег feed), бо файл може
-  // бути >100МБ (git push такі відхиляє). Постійний URL для маркетплейсу:
+  // посилання — фіди публікуються на GitHub Pages (стабільна URL без
+  // 302-редиректів і протухаючих підписів, Content-Type: application/xml):
   document.getElementById('xml-urls').innerHTML = feeds.map(f =>
-    `<div class="url-box">https://github.com/${GH.account}/${GH.repo}/releases/download/feed/${f.id}.xml</div>`
+    `<div class="url-box">https://${GH.account}.github.io/${GH.repo}/${f.id}.xml</div>`
   ).join('');
 
   renderFeedTabs();

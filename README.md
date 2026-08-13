@@ -107,20 +107,23 @@ Brain **офіційно не документує** ні rate-ліміт, ні 
 
 ## 🔗 Постійне посилання на фід (для KASTA)
 
-Фіди віддаються через **GitHub Release** (тег `feed`) — один файл до **2 ГБ**.
-Посилання **не змінюється**:
+Фіди публікуються на **GitHub Pages** — стабільна URL без редиректів,
+протухаючих підписів і з правильним `Content-Type: application/xml`.
+Workflow заливає `kasta.xml` / `kasta2.xml` на Pages після кожного експорту.
 
 ```
-https://github.com/ВАШ_АКАУНТ/brain-exporter/releases/download/feed/kasta.xml
+https://lozko1991-blip.github.io/brain-exporter/kasta.xml
 ```
 
 (де `kasta` — це `id` фіда з `feeds.json`).
 
 Встав це посилання в кабінет KASTA (Rozetka/Prom — аналогічно своїм `id`.xml).
 
-> Чому Release, а не `raw.githubusercontent`? `git push` відхиляє файли **>100 МБ**,
-> а каталог на 40k товарів — це 200–500 МБ. Release тримає до 2 ГБ і не роздуває
-> git-історію щоденними комітами кешу.
+> Чому не `releases/download/feed/kasta.xml`? GitHub віддає Release-асети через
+> 302-редирект на підписану URL, що протухає ~1 год, з
+> `Content-Type: application/octet-stream`. Імпортери маркетплейсів кешують
+> такий фід за URL і не підтягують оновлення (саме це було з Kasta).
+> Pages віддає файл напряму, з кешем 10 хв (`Cache-Control: max-age=600`).
 
 ---
 

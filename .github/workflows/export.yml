@@ -14,8 +14,14 @@ name: 🧠 Brain → XML Export
 #
 # Великі файли (products_cache.json, output/*.xml) живуть у Release-асеті
 # з постійним тегом `feed`, а НЕ в git (інакше push>100МБ падає, а репо
-# роздувається від щоденних комітів). Постійне посилання для KASTA:
-#   https://github.com/АКАУНТ/РЕПО/releases/download/feed/kasta.xml
+# роздувається від щоденних комітів).
+#
+# Публічна URL для KASTA — GitHub Pages (деплой через Actions):
+#   https://АКАУНТ.github.io/РЕПО/kasta.xml
+# Release-asset URL (releases/download/...) НЕ використовується у маркетплейсі:
+# GitHub віддає його через 302-редирект на підписану URL, що протухає ~1 год,
+# з Content-Type: application/octet-stream — імпортери кешують такий фід
+# за URL і не бачать оновлень (саме це було з Kasta).
 # ─────────────────────────────────────────────────────────────────────
 
 on:
@@ -51,6 +57,8 @@ env:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   # ════════════════════════════════════════════════════════════════
@@ -129,6 +137,17 @@ jobs:
           git add -f gender_pins.json || true
           git diff --staged --quiet || git commit -m "🔄 categories + gender_pins [$(date +'%Y-%m-%d %H:%M')] quick"
           git push || true
+
+      - name: 🌐 Підготовка Pages artifact (фіди для KASTA)
+        run: |
+          test -f output/kasta.xml
+          test -f output/kasta2.xml
+          mkdir -p _pages
+          cp index.html feeds.json categories.json gender_pins.json _pages/ 2>/dev/null || true
+          cp output/kasta.xml output/kasta2.xml _pages/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _pages
 
   # ════════════════════════════════════════════════════════════════
   #  FULL — setup → shard×N → merge
@@ -259,9 +278,39 @@ jobs:
           git diff --staged --quiet || git commit -m "🔄 categories + gender_pins [$(date +'%Y-%m-%d %H:%M')] full"
           git push || true
 
+      - name: 🌐 Підготовка Pages artifact (фіди для KASTA)
+        run: |
+          test -f output/kasta.xml
+          test -f output/kasta2.xml
+          mkdir -p _pages
+          cp index.html feeds.json categories.json gender_pins.json _pages/ 2>/dev/null || true
+          cp output/kasta.xml output/kasta2.xml _pages/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _pages
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: brain-catalog-${{ github.run_number }}
           path: output/*.xml
           retention-days: 30
+
+  # ════════════════════════════════════════════════════════════════
+  #  GitHub Pages — стабільна URL для KASTA (без редиректу/підписів)
+  #  https://АКАУНТ.github.io/РЕПО/kasta.xml
+  # ════════════════════════════════════════════════════════════════
+  publish-pages:
+    name: 🌐 Деплой фідів на GitHub Pages
+    needs: [quick, merge]
+    if: needs.quick.result == 'success' || needs.merge.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
