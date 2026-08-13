@@ -99,6 +99,13 @@ jobs:
     if: needs.prepare.outputs.mode == 'quick'
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages-deploy
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -153,6 +160,9 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _pages
+      - name: 🌐 Деплой фідів на GitHub Pages
+        uses: actions/deploy-pages@v4
+        id: deployment
 
   # ════════════════════════════════════════════════════════════════
   #  FULL — setup → shard×N → merge
@@ -238,6 +248,13 @@ jobs:
     if: needs.prepare.outputs.mode == 'full' && always()
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages-deploy
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -298,6 +315,9 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _pages
+      - name: 🌐 Деплой фідів на GitHub Pages
+        uses: actions/deploy-pages@v4
+        id: deployment
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -305,25 +325,3 @@ jobs:
           name: brain-catalog-${{ github.run_number }}
           path: output/*.xml
           retention-days: 30
-
-  # ════════════════════════════════════════════════════════════════
-  #  GitHub Pages — стабільна URL для KASTA (без редиректу/підписів)
-  #  https://АКАУНТ.github.io/РЕПО/kasta.xml
-  # ════════════════════════════════════════════════════════════════
-  publish-pages:
-    name: 🌐 Деплой фідів на GitHub Pages
-    needs: [quick, merge]
-    if: needs.quick.result == 'success' || needs.merge.result == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    concurrency:
-      group: pages-deploy
-      cancel-in-progress: false
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
