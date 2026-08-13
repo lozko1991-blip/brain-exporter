@@ -140,11 +140,16 @@ jobs:
 
       - name: 🌐 Підготовка Pages artifact (фіди для KASTA)
         run: |
-          test -f output/kasta.xml
-          test -f output/kasta2.xml
+          if [ ! -f output/kasta.xml ] && [ ! -f output/kasta2.xml ]; then
+            echo "❌ Немає жодного XML — Pages не оновлюється"; exit 1
+          fi
           mkdir -p _pages
-          cp index.html feeds.json categories.json gender_pins.json _pages/ 2>/dev/null || true
-          cp output/kasta.xml output/kasta2.xml _pages/
+          for f in index.html feeds.json categories.json gender_pins.json; do
+            [ -f "$f" ] && cp "$f" _pages/ || true
+          done
+          for f in output/kasta.xml output/kasta2.xml; do
+            [ -f "$f" ] && cp "$f" _pages/ || true
+          done
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _pages
@@ -280,11 +285,16 @@ jobs:
 
       - name: 🌐 Підготовка Pages artifact (фіди для KASTA)
         run: |
-          test -f output/kasta.xml
-          test -f output/kasta2.xml
+          if [ ! -f output/kasta.xml ] && [ ! -f output/kasta2.xml ]; then
+            echo "❌ Немає жодного XML — Pages не оновлюється"; exit 1
+          fi
           mkdir -p _pages
-          cp index.html feeds.json categories.json gender_pins.json _pages/ 2>/dev/null || true
-          cp output/kasta.xml output/kasta2.xml _pages/
+          for f in index.html feeds.json categories.json gender_pins.json; do
+            [ -f "$f" ] && cp "$f" _pages/ || true
+          done
+          for f in output/kasta.xml output/kasta2.xml; do
+            [ -f "$f" ] && cp "$f" _pages/ || true
+          done
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _pages
@@ -308,6 +318,9 @@ jobs:
     permissions:
       pages: write
       id-token: write
+    concurrency:
+      group: pages-deploy
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
