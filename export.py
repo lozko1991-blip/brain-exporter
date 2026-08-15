@@ -957,16 +957,30 @@ KASTA_KIDS_AGE_MAP = {
     170: "15р.", 176: "16р.", 182: "17р.", 188: "18р."
 }
 
+# Зворотні карти вік→зріст (сітка Kasta для дитячого одягу: «Xсм» завжди валідний)
+KASTA_AGE_TO_HEIGHT = {
+    1: 80, 2: 92, 3: 98, 4: 104, 5: 110, 6: 116, 7: 122, 8: 128, 9: 134,
+    10: 140, 11: 146, 12: 152, 13: 158, 14: 164, 15: 170, 16: 176, 17: 182, 18: 188,
+}
+KASTA_MONTH_TO_HEIGHT = {0: 36, 1: 52, 3: 62, 6: 68, 9: 74, 12: 80, 18: 86}
+
+
+def snap_kasta_height(num: int) -> int:
+    """Округлює зріст до найближчого МЕНШОГО значення сітки Kasta."""
+    if num in KASTA_KIDS_HEIGHTS:
+        return num
+    smaller = [h for h in KASTA_KIDS_HEIGHTS if h <= num]
+    return max(smaller) if smaller else num
+
 
 def standardize_kasta_size(size_str: str) -> str:
     """
     Стандартизує розміри під сітку Kasta:
       - Діапазони VALUE-VALUE (однакові) → одне значення: "44-44" → "44", "104 см-104 см" → "104 см"
-      - Діапазони взуття: "28-30" → "28" (перше менше значення)
-      - Діапазони зросту: "74 - 84 см" → "74 см"
-      - Діапазони вікові: "10-11 р" → "10р."
-      - Зріст знаходить точний або найближчий МЕНШИЙ.
-      - Вік (місяці/роки) — мапить до стандартів Kasta.
+      - Діапазони взуття: "28-30" → "28-30" (числа <30, без "см")
+      - Діапазони зросту: "74 - 84 см" / "62-68" → "74см-80см" / "62см-68см"
+      - Вік (роки/місяці) → зріст сітки: "12р." → "152см", "12м." → "80см"
+      - Зріст → формат сітки Kasta з "см": "116" → "116см"
     """
     if not size_str:
         return ""
@@ -981,55 +995,65 @@ def standardize_kasta_size(size_str: str) -> str:
     val_lower = val.lower()
     nums = [int(n) for n in re.findall(r'\d+', val_lower)]
 
-    # ── 1. Діапазон зросту зі "см": "74 - 84 см" → "74-80" ──
+    # ── 1. Діапазон зросту зі "см": "74 - 84 см" → "74см-80см" ──
     height_range = re.match(r'^(\d+)\s*(?:см|cm)?\s*-\s*(\d+)\s*(?:см|cm)', val_lower)
     if height_range:
-        lo = int(height_range.group(1))
-        hi = int(height_range.group(2))
-        
-        def snap_h(num):
-            if num in KASTA_KIDS_HEIGHTS:
-                return num
-            smaller = [h for h in KASTA_KIDS_HEIGHTS if h <= num]
-            if smaller:
-                return max(smaller)
-            return num
-            
-        lo_h = snap_h(lo)
-        hi_h = snap_h(hi)
-        return str(lo_h) if lo_h == hi_h else f"{lo_h}-{hi_h}"
+        lo_h = snap_kasta_height(int(height_range.group(1)))
+        hi_h = snap_kasta_height(int(height_range.group(2)))
+        return f"{lo_h}см" if lo_h == hi_h else f"{lo_h}см-{hi_h}см"
 
-    # ── 2. Пошук числового зросту (наприклад, "152 см", "рост 76") ──
+    # ── 1б. Діапазон зросту БЕЗ "см": "62-68" → "62см-68см" (взуття <30 не чіпаємо) ──
+    plain_range = re.match(r'^(\d+)\s*-\s*(\d+)$', val.strip())
+    if plain_range:
+        n1, n2 = int(plain_range.group(1)), int(plain_range.group(2))
+        if 30 <= n1 <= n2 <= 200:
+            lo_h = snap_kasta_height(n1)
+            hi_h = snap_kasta_height(n2)
+            return f"{lo_h}см" if lo_h == hi_h else f"{lo_h}см-{hi_h}см"
+
+    # ── 2. Пошук числового зросту (наприклад, "152 см", "рост 76", "116") ──
     if nums:
         num = min(nums)
         if 30 <= num <= 200:
             is_height = True
             if num < 80:
-                is_height = any(h_word in val_lower for h_word in ["см", "cm", "рост", "зріст"])
+                is_height = any(h_word in val_lower for h_word in ["см", "cm", "рост", "зріст"]) or num in KASTA_KIDS_HEIGHTS
 
             if is_height:
                 if num in KASTA_KIDS_HEIGHTS:
-                    return str(num)
+                    return f"{num}см"
                 smaller_heights = [h for h in KASTA_KIDS_HEIGHTS if h <= num]
                 if smaller_heights:
                     best_h = max(smaller_heights)
-                    return str(best_h)
-                return "36"
+                    return f"{best_h}см"
+                return "36см"
 
-    # ── 3. Вік у місяцях (мапимо діапазони "0-3 міс" → "0м.", "3-6 міс" → "3м.") ──
+    # ── 3. Вік у місяцях: "3-6 міс" → зріст сітки (62см) ──
     if any(m_word in val_lower for m_word in ["міс", "мес", "місяц", "месяц"]):
         months = min(nums) if nums else 0
         allowed_months = [0, 1, 3, 6, 9, 12, 18]
         smaller_m = [m for m in allowed_months if m <= months]
         best_m = max(smaller_m) if smaller_m else 0
-        return f"{best_m}м."
+        h = KASTA_MONTH_TO_HEIGHT.get(best_m, 80)
+        return f"{h}см"
 
-    # ── 4. Вік у роках (діапазон "10-11 р" → "10р.") ──
+    # ── 3б. Вік у місяцях у форматі "12м." → зріст сітки (80см) ──
+    m_dot = re.match(r'^(\d{1,2})\s*м\.?$', val_lower)
+    if m_dot:
+        months = int(m_dot.group(1))
+        smaller_m = [m for m in [0, 1, 3, 6, 9, 12, 18] if m <= months]
+        best_m = max(smaller_m) if smaller_m else 0
+        h = KASTA_MONTH_TO_HEIGHT.get(best_m, 80)
+        return f"{h}см"
+
+    # ── 4. Вік у роках: "10-11 р" / "12р." → зріст сітки (140см / 152см) ──
     if any(y_word in val_lower for y_word in ["р.", "р ", " р", "рік", "рок", "лет", "year"]) or \
        (nums and re.search(r'^\d{1,2}\s*р\.?$', val_lower)):
         years = min(nums) if nums else 0
         if 1 <= years <= 18:
-            return f"{years}р."
+            h = KASTA_AGE_TO_HEIGHT.get(years)
+            if h:
+                return f"{h}см"
 
     # ── 5. Діапазон взуття / числовий без "см": "28-30" → "28-30" ──
     shoe_range = re.match(r'^(\d+)\s*-\s*(\d+)$', val.strip())
