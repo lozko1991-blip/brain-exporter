@@ -965,6 +965,14 @@ def snap_kasta_height(num: int) -> int:
     return max(smaller) if smaller else num
 
 
+# Зворотні карти вік→зріст (сітка Kasta: вікові значення імпортер НЕ приймає — тільки "Xсм")
+KASTA_AGE_TO_HEIGHT = {
+    1: 80, 2: 92, 3: 98, 4: 104, 5: 110, 6: 116, 7: 122, 8: 128, 9: 134,
+    10: 140, 11: 146, 12: 152, 13: 158, 14: 164, 15: 170, 16: 176, 17: 182, 18: 188,
+}
+KASTA_MONTH_TO_HEIGHT = {0: 36, 1: 52, 3: 62, 6: 68, 9: 74, 12: 80, 18: 86}
+
+
 def standardize_kasta_size(size_str: str) -> str:
     """
     Стандартизує розміри під сітку Kasta:
@@ -1020,28 +1028,36 @@ def standardize_kasta_size(size_str: str) -> str:
                     return f"{best_h}см"
                 return "36см"
 
-    # ── 3. Вік у місяцях: "3-6 міс" → "3м." (Kasta приймає вікові значення сітки) ──
+    # ── 3. Вік у місяцях: "3-6 міс" → зріст сітки "62см" (Kasta вік не приймає) ──
     if any(m_word in val_lower for m_word in ["міс", "мес", "місяц", "месяц"]):
         months = min(nums) if nums else 0
         allowed_months = [0, 1, 3, 6, 9, 12, 18]
         smaller_m = [m for m in allowed_months if m <= months]
         best_m = max(smaller_m) if smaller_m else 0
-        return f"{best_m}м."
+        h = KASTA_MONTH_TO_HEIGHT.get(best_m, 80)
+        return f"{h}см"
 
-    # ── 3б. Вік у місяцях у форматі "12м." → залишаємо віковим "12м." ──
+    # ── 3б. Вік у місяцях у форматі "12м." → зріст сітки "80см" ──
     m_dot = re.match(r'^(\d{1,2})\s*м\.?$', val_lower)
     if m_dot:
         months = int(m_dot.group(1))
         smaller_m = [m for m in [0, 1, 3, 6, 9, 12, 18] if m <= months]
         best_m = max(smaller_m) if smaller_m else 0
-        return f"{best_m}м."
+        h = KASTA_MONTH_TO_HEIGHT.get(best_m, 80)
+        return f"{h}см"
 
-    # ── 4. Вік у роках: "10-11 р" / "12р." → залишаємо віковим "10р." / "12р." ──
+    # ── 3в. "новонароджений" → найменший зріст сітки ──
+    if "новонародж" in val_lower:
+        return "36см"
+
+    # ── 4. Вік у роках: "10-11 р" / "12р." → зріст сітки "140см" / "152см" ──
     if any(y_word in val_lower for y_word in ["р.", "р ", " р", "рік", "рок", "лет", "year"]) or \
        (nums and re.search(r'^\d{1,2}\s*р\.?$', val_lower)):
         years = min(nums) if nums else 0
         if 1 <= years <= 18:
-            return f"{years}р."
+            h = KASTA_AGE_TO_HEIGHT.get(years)
+            if h:
+                return f"{h}см"
 
     # ── 5. Діапазон взуття / числовий без "см": "28-30" → "28-30" ──
     shoe_range = re.match(r'^(\d+)\s*-\s*(\d+)$', val.strip())
@@ -1291,31 +1307,33 @@ def standardize_kasta_characteristics(p: dict, kasta_char_cfg: dict) -> list[dic
         if oname_lower in ("застібка", "застежка", "декорування"):
             continue
             
-        # Обробка Довжини рукава під стандарти Kasta (без см)
+        # Обробка Довжини рукава під стандарти Kasta (шаблон: Без рукава / Рукав 3/4 / Короткий / Довгий...)
         if oname_lower in ("довжина рукава", "длина рукава"):
             val_l = oval.lower()
             if any(w in val_l for w in ["без рукав", "безрукав"]):
-                oval = "без рукавів"
+                oval = "Без рукава"
             elif any(w in val_l for w in ["3/4", "три чверті"]):
-                oval = "3/4"
+                oval = "Рукав 3/4"
+            elif any(w in val_l for w in ["7/8"]):
+                oval = "Рукав 7/8"
+            elif "до лікт" in val_l or "до локт" in val_l:
+                oval = "До ліктя"
             elif "коротк" in val_l:
-                oval = "короткий"
+                oval = "Короткий"
             elif "довг" in val_l:
-                oval = "довгий"
+                oval = "Довгий"
             else:
                 nums = [int(n) for n in re.findall(r'\d+', oval)]
                 if nums:
-                    oval = "короткий" if nums[0] <= 15 else "довгий"
+                    oval = "Короткий" if nums[0] <= 15 else "Довгий"
                 else:
                     continue
-        # Обробка Типу (комплектації) під стандарти Kasta
+        # "Тип"/"Вид" — відсутні в шаблоні характеристик Kasta (MATCH_ERROR) → пропускаємо
         if oname_lower in ("тип", "вид"):
-            type_map = kasta_char_cfg.get("type_map", {})
-            val_l = oval.lower().strip()
-            if val_l in type_map:
-                oval = type_map[val_l]
-            elif val_l in ("зимова", "демісезонна", "літня", "всесезонна", "легка"):
-                continue  # ці значення належать до Сезонності, а не Типу
+            continue
+        # "Довжина виробу" — відсутня в шаблоні Kasta (MATCH_ERROR) → пропускаємо
+        if oname_lower in ("довжина виробу", "длина изделия"):
+            continue
 
         out.append({"name": oname, "value": oval})
         
