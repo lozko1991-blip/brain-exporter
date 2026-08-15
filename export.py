@@ -943,6 +943,13 @@ SIZE_PARAM_NAMES = (
     "розмір шкарпеток", "довжина ступні", "длина ступни",
 )
 
+# «Вік» — НЕ розмір одягу (у Brain іде перед «Зріст», і ми помилково брали його першим).
+# Використовується ТІЛЬКИ як фолбек у size_value(), коли розміру/зросту немає.
+AGE_PARAM_NAMES = (
+    "вік", "возраст", "вікова група", "возрастная группа",
+    "вік дитини", "возраст ребенка", "вікова категорія", "возрастная категория",
+)
+
 KASTA_KIDS_HEIGHTS = [
     36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 62, 68, 74, 80, 86, 92, 98,
     104, 110, 116, 122, 128, 134, 140, 146, 152, 158, 164, 170, 176, 182, 188
@@ -1970,6 +1977,10 @@ def build_kasta_feed_xml(
                     std_c = standardize_kasta_color(oval, kasta_cfg)
                     if std_c and std_c not in colors_list:
                         colors_list.append(std_c)
+                elif oname_lower in AGE_PARAM_NAMES:
+                    # «Вік» не є розміром — пропускаємо тут; фолбек size_value() візьме його
+                    # лише якщо розміру/зросту у товару взагалі немає
+                    continue
                 elif oname_lower in SIZE_PARAM_NAMES:
                     if not has_rozmir:
                         std_sz = standardize_kasta_size(oval)
