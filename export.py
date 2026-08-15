@@ -1961,6 +1961,10 @@ def build_kasta_feed_xml(
                 else:
                     other_params.append((oname, oval))
 
+            # ── 1б. Дефолт сезону: якщо сезон не вказаний — Демісезон (Kasta вимагає) ──
+            if not any("езонн" in n.lower() for n, _ in other_params):
+                other_params.append(("Сезонність", "Демісезон"))
+
             # ── 2. Якщо явного «Розмір» немає, шукаємо у фолбеках (Зріст / Вік / Розмір взуття) ──
             if not has_rozmir:
                 sv, _src = size_value(p)
@@ -2057,6 +2061,12 @@ def build_kasta_feed_xml(
                     pr = SubElement(offer, "param")
                     pr.set("name", "Колір")
                     pr.text = col_val
+                    seen_params.add("колір")
+                elif not colors_list:
+                    # Колір не вказаний взагалі → комбінований (вимога Kasta)
+                    pr = SubElement(offer, "param")
+                    pr.set("name", "Колір")
+                    pr.text = "комбінований"
                     seen_params.add("колір")
 
                 # 2) Інші параметри (Розмір, Матеріал тощо)
