@@ -37,6 +37,10 @@ import httpx
 # ══════════════════════════════════════════════════════════════════
 API_BASE   = "http://api.brain.com.ua"
 OUTPUT_DIR = Path("output")
+# Аварійний режим: якщо у корені репо є файл EMERGENCY_STOP з вмістом "1",
+# всі товари у Kasta-фідах віддаються як available="false" + stock_quantity=0
+# (ціни та решта не змінюються). Видалити файл = повернутись до звичайного режиму.
+EMERGENCY_FILE = Path("EMERGENCY_STOP")
 CACHE_FILE = Path("products_cache.json")
 CATS_FILE  = Path("categories.json")
 FEEDS_FILE = Path("feeds.json")
@@ -1795,6 +1799,16 @@ def build_kasta_feed_xml(
     mp   = feed["markup_percent"]
     mf   = feed["markup_fixed"]
     suffixes = GENDER_SUFFIX.get(lang, GENDER_SUFFIX["ua"])
+
+    # ── Аварійний режим: файл EMERGENCY_STOP (вміст "1") → всі товари зі стоком 0 ──
+    emergency = False
+    try:
+        emergency = EMERGENCY_FILE.exists() and EMERGENCY_FILE.read_text(
+            encoding="utf-8", errors="ignore").strip() == "1"
+    except Exception:
+        emergency = False
+    if emergency:
+        log("🚨 АВАРІЙНИЙ РЕЖИМ: усі товари — available=false, stock=0 (ціни не змінюються)")
     # префікси ID per-feed (fallback на глобальний "br")
     po = feed.get("prefix_offer")    or ID_PREFIX
     pc = feed.get("prefix_category") or ID_PREFIX
@@ -2019,7 +2033,7 @@ def build_kasta_feed_xml(
                 else:
                     offer.set("id", oid(pid))
                     
-                offer.set("available", "true")
+                offer.set("available", "false" if emergency else "true")
 
                 gid = build_group_id(p)
                 if gid:
@@ -2081,7 +2095,7 @@ def build_kasta_feed_xml(
                 if desc_ru:
                     SubElement(offer, "description_ru").text = desc_ru
 
-                SubElement(offer, "stock_quantity").text = str(qty)
+                SubElement(offer, "stock_quantity").text = str(0 if emergency else qty)
 
                 # ── ХАРАКТЕРИСТИКИ з дедублікацією назв тегів у межах одного offer ──
                 seen_params = set()

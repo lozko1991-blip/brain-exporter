@@ -247,6 +247,8 @@
         <button class="copy-btn" onclick="saveToGitHub()" style="border-color:var(--green); color:var(--green)">☁️ Зберегти на GitHub</button>
         <button class="copy-btn" onclick="triggerExport('quick')" style="border-color:var(--amber); color:var(--amber)">⚡ Часткове оновлення (швидке)</button>
         <button class="copy-btn" onclick="triggerExport('full')" style="border-color:var(--blue); color:var(--blue)">🚀 Повне оновлення (усі дані)</button>
+        <button class="copy-btn" onclick="setEmergency(true)" style="border-color:var(--red); color:var(--red)">🚨 Аварійний режим: всі товари «нема в наявності»</button>
+        <button class="copy-btn" onclick="setEmergency(false)" style="border-color:var(--red); color:var(--red)">✅ Вийти з аварійного режиму</button>
       </div>
 
       <div id="api-log" style="font-size:11px; color:var(--t3); margin-top:10px; margin-bottom:14px; white-space:pre-wrap"></div>
@@ -860,6 +862,39 @@ async function saveToGitHub() {
     }
   } catch (e) {
     logDiv.innerHTML = `<span style="color:var(--red)">❌ Помилка: ${e.message}</span>`;
+  }
+}
+async function setEmergency(on) {
+  const logDiv = document.getElementById('api-log');
+  const path = 'EMERGENCY_STOP';
+  const url = `https://api.github.com/repos/${GH.account}/${GH.repo}/contents/${path}`;
+  const headers = getGHHeaders();
+  let sha = null;
+  try {
+    const r = await fetch(url, { headers });
+    if (r.ok) { const d = await r.json(); sha = d.sha; }
+  } catch (e) { console.log(e); }
+  if (on) {
+    logDiv.textContent = '⏳ Увімкнення аварійного режиму...';
+    const body = { message: "🚨 EMERGENCY: всі товари зі стоком 0", content: btoa('1') };
+    if (sha) body.sha = sha;
+    try {
+      const r = await fetch(url, { method: 'PUT', headers, body: JSON.stringify(body) });
+      if (r.ok) {
+        logDiv.innerHTML = '<span style="color:var(--red)">🚨 АВАРІЙНИЙ РЕЖИМ УВІМКНЕНО! Запустіть швидке оновлення — всі товари стануть «нема в наявності».</span>';
+        setTimeout(loadWorkflowStatus, 4000);
+      } else { const e = await r.json(); logDiv.innerHTML = `<span style="color:var(--red)">❌ Помилка: ${e.message}</span>`; }
+    } catch (e) { logDiv.innerHTML = `<span style="color:var(--red)">❌ Помилка: ${e.message}</span>`; }
+  } else {
+    logDiv.textContent = '⏳ Вимкнення аварійного режиму...';
+    if (!sha) { logDiv.innerHTML = '<span style="color:var(--green)">✅ Аварійний режим і так вимкнено.</span>'; return; }
+    try {
+      const r = await fetch(url, { method: 'DELETE', headers, body: JSON.stringify({ message: "Вимкнення аварійного режиму", sha }) });
+      if (r.ok) {
+        logDiv.innerHTML = '<span style="color:var(--green)">✅ Аварійний режим вимкнено. Запустіть швидке оновлення — товари повернуться в продаж.</span>';
+        setTimeout(loadWorkflowStatus, 4000);
+      } else { const e = await r.json(); logDiv.innerHTML = `<span style="color:var(--red)">❌ Помилка: ${e.message}</span>`; }
+    } catch (e) { logDiv.innerHTML = `<span style="color:var(--red)">❌ Помилка: ${e.message}</span>`; }
   }
 }
 async function triggerExport(mode) {
