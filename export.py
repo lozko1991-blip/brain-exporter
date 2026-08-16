@@ -2032,16 +2032,17 @@ def build_kasta_feed_xml(
                 cat_id_out = cidx(orig_cid) + (GENDER_CID_SUFFIX[g] if g else "")
                 SubElement(offer, "categoryId").text = cat_id_out
 
-                # Ціни
+                # Ціни (KASTA: old_price > price > price_promo)
                 sell = round(bp * (1 + mp / 100) + mf, 0)
                 SubElement(offer, "price").text = str(int(sell))
-                try:
-                    rec = float(str(p.get("retail_price_uah")
-                                    or p.get("recommendable_price") or 0).replace(",", "."))
-                except Exception:
-                    rec = 0
-                if rec > sell:
-                    SubElement(offer, "old_price").text = str(int(rec))
+                old_pct = float(feed.get("old_price_percent", 15) or 15)
+                old_p = round(sell * (1 + old_pct / 100))
+                if old_p > sell:
+                    SubElement(offer, "old_price").text = str(int(old_p))
+                promo_pct = float(feed.get("promo_discount_percent", 5) or 5)
+                promo_p = round(sell * (1 - promo_pct / 100))
+                if promo_p < sell:
+                    SubElement(offer, "price_promo").text = str(int(promo_p))
 
                 # Зображення (до 20)
                 n_pics = 0

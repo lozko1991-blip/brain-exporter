@@ -8,6 +8,8 @@
       "lang": "ua",
       "markup_percent": 50,
       "markup_fixed": 50,
+      "promo_discount_percent": 5,
+      "old_price_percent": 15,
       "prefix_offer": "br",
       "prefix_category": "br",
       "category_ids": [
@@ -32,6 +34,8 @@
       "lang": "ua",
       "markup_percent": 50,
       "markup_fixed": 50,
+      "promo_discount_percent": 5,
+      "old_price_percent": 15,
       "prefix_offer": "br",
       "prefix_category": "br",
       "category_ids": [
@@ -56,6 +60,8 @@
       "lang": "ua",
       "markup_percent": 40,
       "markup_fixed": 40,
+      "promo_discount_percent": 5,
+      "old_price_percent": 15,
       "prefix_offer": "br",
       "prefix_category": "br",
       "category_ids": [
