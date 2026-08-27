@@ -1,6 +1,6 @@
 {
-  "generated": "2026-08-26 19:49",
-  "total": 2798,
+  "generated": "2026-08-27 17:26",
+  "total": 2799,
   "categories": [
     {
       "categoryID": 1181,
@@ -1943,6 +1943,12 @@
               "categoryID": 8604,
               "parentID": 1554,
               "name": "Витратні до 3D друку",
+              "children": []
+            },
+            {
+              "categoryID": 10463,
+              "parentID": 1554,
+              "name": "Плівка для факса",
               "children": []
             }
           ]
