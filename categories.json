@@ -1,6 +1,6 @@
 {
-  "generated": "2026-09-17 11:12",
-  "total": 2800,
+  "generated": "2026-09-21 05:38",
+  "total": 2821,
   "categories": [
     {
       "categoryID": 1181,
@@ -2155,6 +2155,12 @@
               "categoryID": 10415,
               "parentID": 8624,
               "name": "Запчастини для 3D-принтерів",
+              "children": []
+            },
+            {
+              "categoryID": 10477,
+              "parentID": 8624,
+              "name": "Плати для принтерів",
               "children": []
             }
           ]
@@ -4762,6 +4768,96 @@
               "categoryID": 10200,
               "parentID": 8183,
               "name": "Столярні пилозбірники",
+              "children": []
+            },
+            {
+              "categoryID": 10465,
+              "parentID": 8183,
+              "name": "Бетонозмішувачі",
+              "children": []
+            },
+            {
+              "categoryID": 10470,
+              "parentID": 8183,
+              "name": "Бруски для шліфування",
+              "children": []
+            },
+            {
+              "categoryID": 10472,
+              "parentID": 8183,
+              "name": "Валики малярні",
+              "children": []
+            },
+            {
+              "categoryID": 10476,
+              "parentID": 8183,
+              "name": "Вимірювачі потужності",
+              "children": []
+            },
+            {
+              "categoryID": 10479,
+              "parentID": 8183,
+              "name": "Гайколоми",
+              "children": []
+            },
+            {
+              "categoryID": 10482,
+              "parentID": 8183,
+              "name": "Гвинти",
+              "children": []
+            },
+            {
+              "categoryID": 10483,
+              "parentID": 8183,
+              "name": "Дюбелі",
+              "children": []
+            },
+            {
+              "categoryID": 10485,
+              "parentID": 8183,
+              "name": "Монтировки",
+              "children": []
+            },
+            {
+              "categoryID": 10466,
+              "parentID": 8183,
+              "name": "Набори приладдя для інструменту",
+              "children": []
+            },
+            {
+              "categoryID": 10467,
+              "parentID": 8183,
+              "name": "Паста для пайки",
+              "children": []
+            },
+            {
+              "categoryID": 10469,
+              "parentID": 8183,
+              "name": "Редуктори-підсилювачі",
+              "children": []
+            },
+            {
+              "categoryID": 10471,
+              "parentID": 8183,
+              "name": "Різаки-рейсмус",
+              "children": []
+            },
+            {
+              "categoryID": 10473,
+              "parentID": 8183,
+              "name": "Садова огорожа",
+              "children": []
+            },
+            {
+              "categoryID": 10474,
+              "parentID": 8183,
+              "name": "Садові будиночки",
+              "children": []
+            },
+            {
+              "categoryID": 10480,
+              "parentID": 8183,
+              "name": "Штроборізи",
               "children": []
             }
           ]
@@ -10910,6 +11006,12 @@
                   "parentID": 9363,
                   "name": "Газовий обігрівач",
                   "children": []
+                },
+                {
+                  "categoryID": 10478,
+                  "parentID": 9363,
+                  "name": "Автономні дизельні обігрівачі",
+                  "children": []
                 }
               ]
             },
@@ -12274,6 +12376,12 @@
               "parentID": 8491,
               "name": "Приставні столи",
               "children": []
+            },
+            {
+              "categoryID": 10481,
+              "parentID": 8491,
+              "name": "Бази для столів",
+              "children": []
             }
           ]
         },
@@ -12286,6 +12394,12 @@
               "categoryID": 7453,
               "parentID": 8494,
               "name": "Крісла",
+              "children": []
+            },
+            {
+              "categoryID": 10475,
+              "parentID": 8494,
+              "name": "Подушки для крісел",
               "children": []
             },
             {
@@ -12334,6 +12448,12 @@
               "categoryID": 10255,
               "parentID": 8494,
               "name": "Органайзери для столу",
+              "children": []
+            },
+            {
+              "categoryID": 10468,
+              "parentID": 8494,
+              "name": "Комплект офісних меблів",
               "children": []
             }
           ]
@@ -15224,6 +15344,12 @@
               "categoryID": 9301,
               "parentID": 9252,
               "name": "Чоботи робочі",
+              "children": []
+            },
+            {
+              "categoryID": 10484,
+              "parentID": 9252,
+              "name": "Сандалі робочі",
               "children": []
             }
           ]
