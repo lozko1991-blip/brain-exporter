@@ -1,6 +1,6 @@
 {
-  "generated": "2026-10-15 21:03",
-  "total": 2821,
+  "generated": "2026-10-16 10:56",
+  "total": 2822,
   "categories": [
     {
       "categoryID": 1181,
@@ -11704,6 +11704,12 @@
                   "categoryID": 10337,
                   "parentID": 9650,
                   "name": "Охолоджуючі спреї",
+                  "children": []
+                },
+                {
+                  "categoryID": 10486,
+                  "parentID": 9650,
+                  "name": "Кільця для пілатесу",
                   "children": []
                 }
               ]
