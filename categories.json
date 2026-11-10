@@ -1,6 +1,6 @@
 {
-  "generated": "2026-11-10 01:16",
-  "total": 2822,
+  "generated": "2026-11-10 14:30",
+  "total": 2823,
   "categories": [
     {
       "categoryID": 1181,
@@ -320,6 +320,12 @@
               "categoryID": 10409,
               "parentID": 1397,
               "name": "Додаткова гарантія",
+              "children": []
+            },
+            {
+              "categoryID": 10487,
+              "parentID": 1397,
+              "name": "Система запобігання витоку даних (DLP)",
               "children": []
             },
             {
