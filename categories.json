@@ -1,6 +1,6 @@
 {
-  "generated": "2026-11-18 23:59",
-  "total": 2823,
+  "generated": "2026-11-19 15:24",
+  "total": 2824,
   "categories": [
     {
       "categoryID": 1181,
@@ -5701,6 +5701,12 @@
               "categoryID": 10461,
               "parentID": 8302,
               "name": "Лекала та шаблони для розмітки",
+              "children": []
+            },
+            {
+              "categoryID": 10488,
+              "parentID": 8302,
+              "name": "Гвинтоверти",
               "children": []
             }
           ]
